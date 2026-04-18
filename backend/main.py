@@ -1,33 +1,72 @@
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from . import models, schemas, database
+import models
+import schemas
+import database
+import logging
+
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # 启动时自动创建数据库表
-models.Base.metadata.create_all(bind=database.engine)
+database.Base.metadata.create_all(bind=database.engine)
 
-app = FastAPI()
+app = FastAPI(title="校园圈后端中心")
 
-# ... 之前的 CORS 配置保持不变 ...
+# CORS 配置：允许前端跨域请求
+origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# 根路由
+@app.get("/")
+def root():
+    logger.info("访问根路径")
+    return {
+        "status": "success",
+        "message": "校园圈后端服务正在运行",
+        "version": "1.0.0"
+    }
 
 
 # 接口 1：获取所有帖子
 @app.get("/api/posts", response_model=list[schemas.Post])
 def get_posts(db: Session = Depends(database.get_db)):
-    # 逐行解释：从数据库查询所有 Post 记录，按 ID 倒序排列
-    posts = db.query(models.Post).order_by(models.Post.id.desc()).all()
-    return posts
+    logger.info("收到获取帖子请求")
+    try:
+        posts = db.query(models.Post).order_by(models.Post.id.desc()).all()
+        logger.info(f"成功获取 {len(posts)} 条帖子")
+        return posts
+    except Exception as e:
+        logger.error(f"获取帖子失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"获取帖子失败: {str(e)}")
 
 
 # 接口 2：发布新帖子
 @app.post("/api/posts", response_model=schemas.Post)
 def create_post(post: schemas.PostCreate, db: Session = Depends(database.get_db)):
-    # 逐行解释：
-    # 1. 将前端传来的数据(post)转换成数据库模型(db_post)
-    db_post = models.Post(title=post.title, content=post.content)
-    # 2. 添加到会话
-    db.add(db_post)
-    # 3. 提交到数据库（真正写入硬盘）
-    db.commit()
-    # 4. 刷新数据（获取数据库生成的 ID 和时间）
-    db.refresh(db_post)
-    return db_post
+    logger.info(f"收到发布帖子请求: {post.title}")
+    try:
+        db_post = models.Post(title=post.title, content=post.content)
+        db.add(db_post)
+        db.commit()
+        db.refresh(db_post)
+        logger.info(f"成功发布帖子: ID={db_post.id}, 标题={db_post.title}")
+        return db_post
+    except Exception as e:
+        db.rollback()
+        logger.error(f"发布帖子失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"发布帖子失败: {str(e)}")

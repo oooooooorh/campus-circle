@@ -1,9 +1,9 @@
 from sqlalchemy import Column, Integer, String, Text, DateTime
 from datetime import datetime
-from .database import Base  # 继承刚才创建的基类
+import database
 
 
-class Post(Base):
+class Post(database.Base):
     __tablename__ = "posts"  # 数据库里的表名
 
     id = Column(Integer, primary_key=True, index=True)  # 主键 ID
