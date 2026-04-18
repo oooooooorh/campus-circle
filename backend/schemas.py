@@ -17,3 +17,13 @@ class Post(BaseModel):
 
     class Config:
         from_attributes = True  # 允许从 ORM 模型转换
+
+class AppointmentCreate(BaseModel):
+    date: str
+    time_slot: str
+    user_name: str
+    
+class Appointment(BaseModel):
+    id: int
+    class Config:
+        from_attributes = True  # 允许从 ORM 模型转换

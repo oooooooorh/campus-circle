@@ -70,3 +70,41 @@ def create_post(post: schemas.PostCreate, db: Session = Depends(database.get_db)
         db.rollback()
         logger.error(f"发布帖子失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"发布帖子失败: {str(e)}")
+
+
+# 接口3：获取指定日期的预约占用情况
+@app.get("/api/appointments/status/{date}")
+def get_status(date: str, db: Session = Depends(database.get_db)):
+    # 查找数据库中该日期所有已被约的记录
+    booked_slots = (
+        db.query(models.Appointment).filter(models.Appointment.date == date).all()
+    )
+    # 只返回时间段列表，例如 ["10:00 ~ 10:30", "11:00 ~ 11:30"]
+    return [slot.time_slot for slot in booked_slots]
+
+
+# 接口4：提交预约请求
+@app.post("/api/appointments")
+def create_appointment(
+    data: schemas.AppointmentCreate, db: Session = Depends(database.get_db)
+):
+    # --- 核心：防冲突检查 ---
+    # 在存入之前，先查一遍：这个日期和时间段是否已经存在？
+    exists = (
+        db.query(models.Appointment)
+        .filter(
+            models.Appointment.date == data.date,
+            models.Appointment.time_slot == data.time_slot,
+        )
+        .first()
+    )
+
+    if exists:
+        # 如果已经存在，直接抛出 400 错误，告诉前端“被人抢先了”
+        raise HTTPException(status_code=400, detail="该时间段已被预约，请选择其他时段")
+
+    # 如果不存在，才执行写入
+    db_appointment = models.Appointment(**data.dict())
+    db.add(db_appointment)
+    db.commit()
+    return {"message": "预约成功"}
