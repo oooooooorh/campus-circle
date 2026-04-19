@@ -104,15 +104,15 @@
             </thead>
             <tbody>
               <tr v-for="(course, index) in schedule" :key="index" class="table-row">
-                <td class="code">{{ course.kh }}</td>
+                <td class="code">{{ course.kch }}</td>
                 <td class="name">{{ course.kcmc }}</td>
                 <td class="credit">{{ course.xf }}</td>
-                <td class="class">{{ course.jxb }}</td>
-                <td class="weeks">{{ course.zc }}</td>
-                <td class="day">{{ course.xq }}</td>
-                <td class="time">{{ course.jc }}</td>
-                <td class="teacher">{{ course.kcjs || '-' }}</td>
-                <td class="location">{{ course.skdd || '-' }}</td>
+                <td class="class">{{ course.jxbmc }}</td>
+                <td class="week">{{ course.zcd }}</td>
+                <td class="day">{{ course.xqjmc }}</td>
+                <td class="period">{{ course.jc }}</td>
+                <td class="teacher">{{ course.xm || '-' }}</td>
+                <td class="location">{{ course.cdmc || '-' }}</td>
               </tr>
             </tbody>
           </table>
@@ -122,6 +122,12 @@
         <h2>📅 周次日程</h2>
         <div class="weekly-schedule">
           <div class="week-grid">
+            <div class="time-column">
+              <div class="day-header">节次</div>
+              <div class="time-slots">
+                <div v-for="period in 15" :key="period" class="time-slot">{{ period }}</div>
+              </div>
+            </div>
             <div 
               v-for="(day, dayIndex) in weekDays" 
               :key="dayIndex"
@@ -133,10 +139,12 @@
                   v-for="(course, courseIndex) in getCoursesForDay(day)"
                   :key="courseIndex"
                   class="course-block"
-                  :style="{ backgroundColor: getCourseColor(courseIndex) }"
+                  :style="getCourseStyle(course)"
                 >
                   <div class="course-title">{{ course.kcmc }}</div>
-                  <div class="course-time">{{ course.jc }}</div>
+                  <div class="course-location">{{ course.cdmc }}</div>
+                  <div class="course-teacher">{{ course.xm ? '@' + course.xm : '' }}</div>
+                  <div class="course-weeks">{{ course.zcd }}</div>
                 </div>
               </div>
             </div>
@@ -178,6 +186,9 @@ const colors = [
   '#F7DC6F', '#BB8FCE', '#85C1E2', '#F8B88B', '#A8E6CF'
 ]
 
+// 给课程分配固定颜色
+const courseColorMap = new Map()
+
 /**
  * 获取周次范围
  */
@@ -185,8 +196,8 @@ const weekRange = computed(() => {
   if (schedule.value.length === 0) return '-'
   const weeks = new Set()
   schedule.value.forEach(course => {
-    if (course.zc) {
-      weeks.add(course.zc)
+    if (course.zcd) {
+      weeks.add(course.zcd)
     }
   })
   return Array.from(weeks).join('; ')
@@ -196,14 +207,61 @@ const weekRange = computed(() => {
  * 获取某天的课程
  */
 function getCoursesForDay(day) {
-  return schedule.value.filter(course => course.xq === day)
+  return schedule.value.filter(course => course.xqjmc === day)
 }
 
 /**
- * 获取课程的随机颜色
+ * 获取课程颜色和位置样式
  */
-function getCourseColor(index) {
-  return colors[index % colors.length]
+function getCourseStyle(course) {
+  const courseName = course.kcmc
+  let bgColor = '#e2e8f0'
+  
+  if (courseName) {
+    if (!courseColorMap.has(courseName)) {
+      const colorIndex = courseColorMap.size % colors.length
+      courseColorMap.set(courseName, colors[colorIndex])
+    }
+    bgColor = courseColorMap.get(courseName)
+  }
+
+  // 计算绝对定位
+  const style = {
+    backgroundColor: bgColor,
+    position: 'absolute',
+    width: '94%',
+    left: '3%',
+    zIndex: 1,
+    borderRadius: '6px',
+    padding: '6px',
+    boxSizing: 'border-box',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    textAlign: 'center',
+    color: 'white',
+    fontSize: '0.8rem',
+    overflow: 'hidden',
+    boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+  }
+
+  if (course.jcs) {
+    const parts = course.jcs.split('-')
+    if (parts.length === 2) {
+      const start = parseInt(parts[0])
+      const end = parseInt(parts[1])
+      const duration = end - start + 1
+      style.top = `${(start - 1) * 60 + 2}px` // +2 for margin
+      style.height = `${duration * 60 - 4}px` // -4 for margin
+    } else if (parts.length === 1) {
+      const start = parseInt(parts[0])
+      style.top = `${(start - 1) * 60 + 2}px`
+      style.height = `${60 - 4}px`
+    }
+  }
+
+  return style
 }
 
 /**
@@ -565,40 +623,62 @@ function downloadJSON() {
 
 .week-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 15px;
+  grid-template-columns: 50px repeat(7, 1fr);
+  gap: 0;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  overflow: hidden;
+  background: white;
+}
+
+.time-column {
+  border-right: 1px solid #e0e0e0;
+  background: #f9f9f9;
 }
 
 .day-column {
-  background: #f9f9f9;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 1px solid #e0e0e0;
+  border-right: 1px solid #e0e0e0;
+  display: flex;
+  flex-direction: column;
+}
+.day-column:last-child {
+  border-right: none;
 }
 
 .day-header {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
-  padding: 10px;
+  padding: 15px 0;
   text-align: center;
   font-weight: 600;
+  font-size: 0.9em;
+}
+
+.time-slots {
+  display: flex;
+  flex-direction: column;
+}
+
+.time-slot {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px dashed #e0e0e0;
+  font-size: 0.8em;
+  color: #666;
+  box-sizing: border-box;
 }
 
 .courses {
-  padding: 10px;
-  min-height: 100px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  position: relative;
+  height: 900px;
+  background-image: repeating-linear-gradient(to bottom, transparent, transparent 59px, #e0e0e0 60px);
 }
 
 .course-block {
-  padding: 10px;
-  border-radius: 6px;
-  color: white;
-  font-size: 0.85em;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
   transition: transform 0.2s;
+  box-sizing: border-box;
 }
 
 .course-block:hover {
