@@ -6,6 +6,8 @@ import asyncio
 import json
 import sys
 import os
+from contextlib import asynccontextmanager
+from playwright.async_api import async_playwright
 
 # 添加后端目录到 Python 路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -25,10 +27,38 @@ logger = logging.getLogger(__name__)
 # 启动时自动创建数据库表
 database.Base.metadata.create_all(bind=database.engine)
 
-# 创建 FastAPI 应用
-app = FastAPI(title="校园圈后端中心")
+# ==================== 应用生命周期事件 ====================
+# 全局 Playwright 和 Browser 实例
+playwright_instance = None
+browser_instance = None
+# 设置并发控制，比如最多允许 3-5 个并发抓取请求以节省内存
+browser_semaphore = asyncio.Semaphore(3)
 
-# CORS 配置：允许前端跨域请求
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global playwright_instance, browser_instance
+    logger.info("========== 应用启动：初始化 Playwright ==========")
+    try:
+        playwright_instance = await async_playwright().start()
+        # 启动一个全局 Browser
+        browser_instance = await playwright_instance.chromium.launch(headless=True)
+        logger.info("Playwright Browser 已成功启动并全局复用")
+    except Exception as e:
+        logger.error(f"Playwright 启动失败: {e}", exc_info=True)
+    yield
+    logger.info("========== 应用关闭：清理 Playwright ==========")
+    if browser_instance:
+        await browser_instance.close()
+    if playwright_instance:
+        await playwright_instance.stop()
+    logger.info("Playwright 资源已清理")
+
+# 创建 FastAPI 应用
+app = FastAPI(title="校园圈后端中心", lifespan=lifespan)
+
+# 如果之前的 @app.on_event("startup") 还存在，可以安全地注释或删除
+# 为了兼容之前的代码结构，把它们替换掉:
+# ==================== CORS 中间件配置 ====================
 origins = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -64,31 +94,27 @@ async def get_schedule(info: schemas.LoginInfo):
     """
     logger.info(f"正在为用户 {info.username} 抓取课表...")
     try:
-        # 在线程池中运行异步爬虫，避免事件循环冲突
-        # 这是处理 Playwright + FastAPI 兼容性问题的标准做法
-        from concurrent.futures import ThreadPoolExecutor
-        import concurrent.futures
-        
-        def run_scraper():
-            """在独立事件循环中运行爬虫"""
+        global browser_instance, browser_semaphore
+        if not browser_instance:
+            raise HTTPException(status_code=500, detail="服务器内部错误：Playwright 浏览器未初始化")
+
+        # 使用 Semaphore 控制并发请求数量，避免内存耗尽
+        async with browser_semaphore:
+            logger.info("创建独立 BrowserContext 避免缓存/Cookie冲突...")
+            # 每个请求创建一个新的 Context
+            context = await browser_instance.new_context()
             try:
-                # 为线程创建新的事件循环
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    result = loop.run_until_complete(
-                        get_campus_schedule(info.username, info.password)
-                    )
-                    return result
-                finally:
-                    loop.close()
-            except Exception as e:
-                logger.error(f"爬虫线程异常: {e}", exc_info=True)
-                return {"error": str(e) if str(e) else "未知错误"}
-        
-        # 使用线程池执行
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            result = executor.submit(run_scraper).result(timeout=180)
+                # 调用 scraper 中的抓取逻辑，并传入 Context
+                result = await get_campus_schedule(
+                   context=context,
+                   username=info.username,
+                   password=info.password,
+                   save_to_file=False
+                )
+            finally:
+                # 非常重要：用完 Context 后立刻关闭！
+                await context.close()
+                logger.info("清理完毕当前的 BrowserContext")
         
         # 检查是否有错误
         if isinstance(result, dict) and "error" in result:
@@ -106,12 +132,10 @@ async def get_schedule(info: schemas.LoginInfo):
         }
     except HTTPException:
         raise
-    except concurrent.futures.TimeoutError:
-        logger.error("课表抓取超时（180秒）")
-        raise HTTPException(status_code=408, detail="课表抓取超时，请稍后重试")
     except Exception as e:
         error_msg = str(e) if str(e) else "未知错误"
-        logger.error(f"课表抓取异常: {error_msg}", exc_info=True)
+        error_type = type(e).__name__
+        logger.error(f"课表抓取异常 [{error_type}]: {error_msg}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"课表抓取失败: {error_msg}")
 
 
