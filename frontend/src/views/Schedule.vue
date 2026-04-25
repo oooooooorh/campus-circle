@@ -158,13 +158,21 @@
         <p>还没有加载课表</p>
         <p class="empty-hint">输入学号和密码，点击"获取课表"开始</p>
       </div>
+
+      <!-- 来自缓存的提示标签 -->
+      <div v-if="isFromCache && schedule.length > 0" class="cache-badge">
+        📦 显示的是上次缓存的课表，点击"获取课表"可刷新
+      </div>
     </div>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { getSchedule } from '../api/schedule-api.js'
+
+// localStorage 键名
+const STORAGE_KEY = 'campus_circle_schedule'
 
 // 状态管理
 const credentials = ref({
@@ -176,6 +184,43 @@ const schedule = ref([])
 const loading = ref(false)
 const error = ref(null)
 const successMessage = ref(null)
+const isFromCache = ref(false)
+
+/**
+ * 从 localStorage 加载历史课表
+ */
+function loadFromCache() {
+  try {
+    const cached = localStorage.getItem(STORAGE_KEY)
+    if (cached) {
+      const parsed = JSON.parse(cached)
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        schedule.value = parsed
+        isFromCache.value = true
+        console.log(`从缓存恢复 ${parsed.length} 条课表数据`)
+      }
+    }
+  } catch (e) {
+    console.warn('缓存读取失败:', e)
+  }
+}
+
+/**
+ * 保存课表到 localStorage
+ */
+function saveToCache(data) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+    console.log(`课表已缓存到本地 (${data.length} 条)`)
+  } catch (e) {
+    console.warn('缓存写入失败:', e)
+  }
+}
+
+// 页面挂载时自动恢复历史数据
+onMounted(() => {
+  loadFromCache()
+})
 
 // 周一到周日
 const weekDays = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日']
@@ -286,6 +331,8 @@ async function fetchSchedule() {
 
     if (result.status === 'success' && result.data) {
       schedule.value = result.data
+      isFromCache.value = false
+      saveToCache(result.data)
       successMessage.value = `✅ 成功加载 ${result.count} 门课程！`
       
       // 3秒后自动关闭成功提示
@@ -719,6 +766,25 @@ function downloadJSON() {
 .empty-hint {
   font-size: 0.95em;
   color: #bbb;
+}
+
+/* 缓存提示条 */
+.cache-badge {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(255, 171, 0, 0.92);
+  color: #5a3e00;
+  padding: 10px 24px;
+  border-radius: 30px;
+  font-size: 0.88em;
+  font-weight: 600;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  backdrop-filter: blur(6px);
+  z-index: 999;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 /* 响应式设计 */
