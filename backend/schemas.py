@@ -1,7 +1,22 @@
 from pydantic import BaseModel
 from datetime import datetime
+from typing import Optional, List, Any
 
 
+# ==================== 登录和课表相关模型 ====================
+class LoginInfo(BaseModel):
+    """用户登录信息"""
+    username: str
+    password: str
+
+
+class ScheduleItem(BaseModel):
+    """课表项目"""
+    class Config:
+        extra = "allow"  # 允许额外字段
+
+
+# ==================== 论坛相关模型 ====================
 # 前端发帖时传过来的数据格式
 class PostCreate(BaseModel):
     title: str

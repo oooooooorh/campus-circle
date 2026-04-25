@@ -1,134 +1,102 @@
-# 校园圈 Campus Circle
+# 校园圈 (Campus Circle)
 
-一个集论坛、课表同步、按摩预约于一体的校园社交应用。
+校园圈是一个基于前后端分离架构编排的校园综合服务平台。系统提供了校园课表查询（通过 Playwright 自动化爬取）、论坛讨论、场馆预约等功能。
 
-## 📋 项目结构
+## 🛠️ 技术栈 (Tech Stack)
 
-```
+### 前端 (Frontend)
+*   **框架**: Vue 3 (Composition API)
+*   **构建工具**: Vite
+*   **路由**: Vue Router
+
+### 后端 (Backend)
+*   **框架**: FastAPI (Python)
+*   **自动化爬虫**: Playwright (用于异步爬取校园课表数据)
+*   **数据库**: SQLite (本地开发) + SQLAlchemy / ORM
+*   **服务器**: Uvicorn
+
+---
+
+## 📂 项目结构 (Project Structure)
+
+```text
 campus-circle/
-├── backend/                # FastAPI 后端
-│   ├── main.py            # 主应用文件
-│   ├── database.py        # 数据库配置
-│   ├── models.py          # SQLAlchemy 数据模型
-│   ├── schemas.py         # Pydantic 数据验证模型
-│   ├── requirements.txt    # Python 依赖
-│   └── .env               # 环境变量
-├── frontend/              # Vue 3 前端
-│   ├── src/
-│   │   ├── components/    # 可复用组件
-│   │   ├── views/         # 页面
-│   │   ├── router/        # 路由配置
-│   │   ├── App.vue        # 主容器
-│   │   ├── main.js        # 入口文件
-│   │   └── style.css      # 全局样式
-│   ├── package.json       # Node 依赖
-│   ├── vite.config.js     # Vite 配置
-│   └── index.html         # HTML 入口
-├── start_backend.bat      # 启动后端脚本
-├── start_frontend.bat     # 启动前端脚本
-└── README.md             # 本文件
+├── backend/                # 后端代码目录
+│   ├── main.py             # FastAPI 应用入口与系统 lifespan 管理
+│   ├── api.py              # 路由 endpoints
+│   ├── core.py             # 核心配置
+│   ├── database.py         # 数据库连接
+│   ├── models.py           # 数据库模型 (SQLAlchemy)
+│   ├── schemas.py          # Pydantic 校验模型
+│   ├── scraper.py          # Playwright 自动爬虫核心逻辑
+│   └── requirements.txt    # Python 依赖清单
+├── frontend/               # 前端代码目录
+│   ├── package.json        # NPM 依赖与脚本
+│   ├── vite.config.js      # Vite 配置文件
+│   └── src/                # 源码目录 (components, views, router 等)
+└── .gitignore              # Git 忽略配置
 ```
 
-## 🚀 快速启动
+---
 
-### 前置条件
+## 🚀 快速启动 (Quick Start)
 
-- **后端**：Python 3.8+ 
-- **前端**：Node.js 16+
+### 1. 环境准备 (Prerequisites)
+*   **Python**: 3.8+ (推荐使用 Conda 虚拟环境)
+*   **Node.js**: 16.x+ (建议使用 LTS 版本)
+*   **包管理器**: npm 或 yarn, pip
 
-### 方式一：使用启动脚本（推荐）
+### 2. 后端部署 (Backend Setup)
 
-在项目根目录打开 cmd，双击或运行：
-
-```bash
-# 后端（新开 cmd 窗口）
-start_backend.bat
-
-# 前端（新开 cmd 窗口）
-start_frontend.bat
-```
-
-### 方式二：手动启动
-
-**启动后端：**
+我们建议您使用 Conda 创建名为 `campus_env` 的虚拟环境：
 
 ```bash
+# 激活环境
+conda activate campus_env
+
+# 进入后端目录
 cd backend
+
+# 安装 Python 依赖包
 pip install -r requirements.txt
-python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+# 安装 Playwright 所需的浏览器内核
+playwright install
+
+# 启动后端服务 (默认在 8000 端口)
+python run_server.py
+# 或使用: python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-后端地址：http://127.0.0.1:8000  
-API 文档：http://127.0.0.1:8000/docs
+### 3. 前端部署 (Frontend Setup)
 
-**启动前端：**
+打开一个新的终端窗口：
 
 ```bash
+# 进入前端目录
 cd frontend
+
+# 安装 Node 依赖
 npm install
+
+# 启动前端开发服务器 (默认在 5173/5175 端口)
 npm run dev
 ```
 
-前端地址：http://localhost:5173
+---
 
-## 📡 API 接口
+## ✨ 核心功能 (Key Features)
 
-### 获取所有帖子
-- **请求**：`GET /api/posts`
-- **响应**：
-```json
-[
-  {
-    "id": 1,
-    "title": "帖子标题",
-    "content": "帖子内容",
-    "created_at": "2026-04-18T10:30:00"
-  }
-]
-```
+*   **课表查询**: 通过 Playwright 引擎自动化爬取教务系统数据，映射并在前端进行精确的可视化排版 (支持 1-15 节课的跨度图表展示)。
+*   **校园论坛**: 用户可以浏览、发布帖子及参与站内讨论。
+*   **场馆预约**: 支持学生在线查看和预约校园可用场地资源。
 
-### 发布新帖子
-- **请求**：`POST /api/posts`
-- **请求体**：
-```json
-{
-  "title": "新帖子标题",
-  "content": "新帖子内容"
-}
-```
-- **响应**：同上
+---
 
-## 🔧 已修复的问题
+## 🤝 团队协作指南 (Git 工作流)
 
-✅ 后端 database.py 导入错误修复  
-✅ 添加 CORS 跨域配置  
-✅ 前端路由导入路径修正  
-✅ Vite 服务器配置补全  
-✅ 数据库配置统一  
-✅ 创建路由配置文件  
-✅ 创建页面组件  
-✅ 创建 PostForm 组件  
-
-## 📝 开发指南
-
-- 前端新增组件：放在 `frontend/src/components/`
-- 新增页面：放在 `frontend/src/views/`
-- 后端新增接口：在 `backend/main.py` 中定义
-- 数据库表定义：在 `backend/models.py` 中定义
-
-## 🐛 常见问题
-
-**Q: 后端启动失败？**  
-A: 确保已安装依赖：`pip install -r requirements.txt`
-
-**Q: 前端打不开？**  
-A: 检查 node_modules，运行 `npm install`
-
-**Q: 跨域错误？**  
-A: 已在 main.py 中配置 CORS，允许 5173 端口访问
-
-## 📚 技术栈
-
-- **后端**：FastAPI + SQLAlchemy + SQLite
-- **前端**：Vue 3 + Vue Router + Vite
-- **数据库**：SQLite3
+1. **获取最新代码**: `git pull origin main`
+2. **创建分支开发**: `git checkout -b feature/your-feature-name`
+3. **提交代码**: `git commit -m "feat: 添加了XXX功能"`
+4. **推送到远程**: `git push origin feature/your-feature-name`
+5. 注意：本项目已配置 `.gitignore`，诸如 `node_modules/`, `venv/`, `__pycache__/` 及本地 `*.db` 数据库文件已被忽略，提交时请直接执行 `git add .`。
