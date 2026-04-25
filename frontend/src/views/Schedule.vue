@@ -17,6 +17,7 @@
             id="username"
             v-model="credentials.username"
             type="text"
+            class="modern-input"
             placeholder="请输入学号"
             :disabled="loading"
             @keyup.enter="fetchSchedule"
@@ -29,6 +30,7 @@
             id="password"
             v-model="credentials.password"
             type="password"
+            class="modern-input"
             placeholder="请输入教务系统密码"
             :disabled="loading"
             @keyup.enter="fetchSchedule"
@@ -38,7 +40,7 @@
         <div class="button-group">
           <button 
             @click="fetchSchedule" 
-            class="btn-primary"
+            class="btn btn-primary"
             :disabled="loading || !credentials.username || !credentials.password"
           >
             <span v-if="!loading">🔄 获取课表</span>
@@ -48,7 +50,7 @@
           <button 
             v-if="schedule.length > 0"
             @click="downloadJSON"
-            class="btn-secondary"
+            class="btn btn-secondary"
             :disabled="loading"
           >
             💾 下载 JSON
