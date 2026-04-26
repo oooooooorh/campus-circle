@@ -69,7 +69,7 @@ const submitPost = async () => {
   loading.value = true
 
   try {
-    const response = await fetch('http://127.0.0.1:8000/api/posts', {
+    const response = await fetch('https://campus-api-bkfua8a9gdcfaff3.eastasia-01.azurewebsites.net/api/posts', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'

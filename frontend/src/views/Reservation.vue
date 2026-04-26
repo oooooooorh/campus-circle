@@ -75,7 +75,7 @@ const selectDate = async (date) => {
   selectedDate.value = date
   selectedSlot.value = '' // 切换日期时清空选中
   try {
-    const res = await fetch(`http://127.0.0.1:8000/api/appointments/status/${date}`)
+    const res = await fetch(`https://campus-api-bkfua8a9gdcfaff3.eastasia-01.azurewebsites.net/api/appointments/status/${date}`)
     bookedSlots.value = await res.json()
   } catch (e) {
     console.error('获取预约状态失败', e)
@@ -85,7 +85,7 @@ const selectDate = async (date) => {
 const handleReserve = async () => {
   submitting.value = true
   try {
-    const res = await fetch('http://127.0.0.1:8000/api/appointments', {
+    const res = await fetch('https://campus-api-bkfua8a9gdcfaff3.eastasia-01.azurewebsites.net/api/appointments', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

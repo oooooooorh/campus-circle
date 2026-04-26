@@ -71,18 +71,13 @@ const error = ref('')
 
 // 获取帖子列表的函数
 const fetchPosts = async () => {
-  loading.value = true
-  error.value = ''
-
   try {
-    const response = await fetch('http://127.0.0.1:8000/api/posts')
-    
-    if (!response.ok) {
+    const response = await fetch('https://campus-api-bkfua8a9gdcfaff3.eastasia-01.azurewebsites.net/api/posts')
+    if (response.ok) {
+      posts.value = await response.json()
+    } else {
       throw new Error(`连接小分队走丢了 (HTTP ${response.status})`)
     }
-
-    const data = await response.json()
-    posts.value = data
   } catch (err) {
     error.value = `获取动态失败: ${err.message}`
   } finally {

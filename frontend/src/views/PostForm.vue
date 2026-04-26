@@ -19,7 +19,7 @@ const emit = defineEmits(['post-success'])
 const submitPost = async () => {
   if (!title.value || !content.value) return alert('请填写完整')
 
-  const response = await fetch('http://127.0.0.1:8000/api/posts', {
+  const response = await fetch('https://campus-api-bkfua8a9gdcfaff3.eastasia-01.azurewebsites.net/api/posts', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ title: title.value, content: content.value })
