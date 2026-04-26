@@ -66,6 +66,11 @@ origins = [
     "http://127.0.0.1:8000",
 ]
 
+# 从环境变量中读取额外的跨域白名单（使用逗号分隔，如 https://my-frontend.azurestaticapps.net）
+env_origins = os.getenv("CORS_ORIGINS", "")
+if env_origins:
+    origins.extend([origin.strip() for origin in env_origins.split(",") if origin.strip()])
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,

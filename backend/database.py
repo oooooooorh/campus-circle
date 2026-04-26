@@ -2,8 +2,10 @@ from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
-# 1. 定义数据库文件的位置（项目根目录下的 campus.db）
-SQLALCHEMY_DATABASE_URL = "sqlite:///./campus.db"
+import os
+
+# 1. 定义数据库文件的位置（项目根目录下的 campus.db，或通过环境变量设置以适应生产环境）
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./campus.db")
 
 # 2. 创建引擎：负责与 SQLite 通讯
 engine = create_engine(
