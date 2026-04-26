@@ -4,7 +4,8 @@
  */
 
 // API 端点
-const API_BASE = "https://campus-api-temp.azurewebsites.net";
+import { API_BASE } from '../config.js';
+
 const SCHEDULE_API = `${API_BASE}/api/schedule`;
 
 /**

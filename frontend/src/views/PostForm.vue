@@ -9,6 +9,7 @@
 
 <script setup>
 import { ref } from 'vue'
+import { API_BASE } from '../config.js'
 
 const title = ref('')
 const content = ref('')
@@ -17,18 +18,20 @@ const content = ref('')
 const emit = defineEmits(['post-success'])
 
 const submitPost = async () => {
-  if (!title.value || !content.value) return alert('请填写完整')
+  try {
+    const response = await fetch(`${API_BASE}/api/posts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: title.value, content: content.value })
+    })
 
-  const response = await fetch('https://campus-api-bkfua8a9gdcfaff3.eastasia-01.azurewebsites.net/api/posts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title: title.value, content: content.value })
-  })
-
-  if (response.ok) {
-    title.value = ''
-    content.value = ''
-    emit('post-success') // 触发事件
+    if (response.ok) {
+      title.value = ''
+      content.value = ''
+      emit('post-success') // 触发事件
+    }
+  } catch (error) {
+    console.error('Error:', error)
   }
 }
 </script>

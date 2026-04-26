@@ -20,8 +20,5 @@ COPY . .
 # 暴露 FastAPI 运行的端口
 EXPOSE 8000
 
-# 为启动脚本添加执行权限
-RUN chmod +x startup.sh
-
-# 启动容器时的默认命令，使用我们刚刚创建的 startup.sh
-CMD ["./startup.sh"]
+# 直接使用 uvicorn 单进程运行
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

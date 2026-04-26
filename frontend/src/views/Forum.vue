@@ -64,6 +64,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import PostForm from '../components/PostForm.vue'
+import { API_BASE } from '../config.js'
 
 const posts = ref([])
 const loading = ref(false)
@@ -72,7 +73,7 @@ const error = ref('')
 // 获取帖子列表的函数
 const fetchPosts = async () => {
   try {
-    const response = await fetch('https://campus-api-bkfua8a9gdcfaff3.eastasia-01.azurewebsites.net/api/posts')
+    const response = await fetch(`${API_BASE}/api/posts`)
     if (response.ok) {
       posts.value = await response.json()
     } else {

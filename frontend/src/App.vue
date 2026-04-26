@@ -26,9 +26,16 @@
           <component :is="Component" />
         </transition>
       </router-view>
+      
+      <!-- AI 助手组件悬浮在整个应用层面 -->
+      <AiChat />
     </main>
   </div>
 </template>
+
+<script setup>
+import AiChat from './components/AiChat.vue'
+</script>
 
 <style>
 /* App Layout */

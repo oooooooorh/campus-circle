@@ -50,7 +50,10 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
+import { API_BASE } from '../config.js'
+
+const emit = defineEmits(['post-created'])
 
 const form = ref({
   title: '',
@@ -61,15 +64,16 @@ const error = ref('')
 const successMsg = ref('')
 const loading = ref(false)
 
-const emit = defineEmits(['post-success'])
+const isValid = computed(() => {
+  return form.value.title.trim() !== '' && form.value.content.trim() !== ''
+})
 
 const submitPost = async () => {
-  error.value = ''
-  successMsg.value = ''
-  loading.value = true
-
+  if (!isValid.value) return
+  
+  isSubmitting.value = true
   try {
-    const response = await fetch('https://campus-api-bkfua8a9gdcfaff3.eastasia-01.azurewebsites.net/api/posts', {
+    const response = await fetch(`${API_BASE}/api/posts`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -83,7 +87,7 @@ const submitPost = async () => {
       form.value = { title: '', content: '' }
       successMsg.value = '发布成功！你的声音已被世界听到。'
       setTimeout(() => { successMsg.value = '' }, 3000)
-      emit('post-success')
+      emit('post-created')
     } else {
       error.value = `发布失败: ${data.detail || '未知错误，请稍后再试'}`
     }

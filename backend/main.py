@@ -8,6 +8,8 @@ import sys
 import os
 from contextlib import asynccontextmanager
 from playwright.async_api import async_playwright
+from openai import OpenAI
+from pydantic import BaseModel
 
 # 添加后端目录到 Python 路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -16,6 +18,18 @@ import models
 import schemas
 import database
 from scraper import get_campus_schedule
+
+# ==================== 配置硅基流动大模型 API ====================
+SILICONFLOW_API_KEY = os.getenv(
+    "SILICONFLOW_API_KEY", "sk-byakstymalszdmtswgokqspuexjyauwwzgpiaarxpzfbogzh"
+)
+ai_client = OpenAI(
+    api_key=SILICONFLOW_API_KEY,
+    base_url="https://api.siliconflow.cn/v1"
+)
+
+class ChatRequest(BaseModel):
+    user_message: str
 
 # 配置日志，确保UTF-8编码处理中文
 logging.basicConfig(
@@ -73,10 +87,12 @@ if env_origins:
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    # 允许所有域名访问（最简单，先确保跑通）
+    allow_origins=["*"], 
+    # 或者填你的前端地址：allow_origins=["https://ashy-forest-0df45ff00.7.azurestaticapps.net"],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"], # 允许所有方法 (GET, POST, OPTIONS等)
+    allow_headers=["*"], # 允许所有请求头
 )
 
 # 根路由
@@ -144,69 +160,41 @@ async def get_schedule(info: schemas.LoginInfo):
         raise HTTPException(status_code=500, detail=f"课表抓取失败: {error_msg}")
 
 
-# 接口 1：获取所有帖子
+# ==================== 获取全部帖子 (改进版 支持分页或者一次性获取) ====================
 @app.get("/api/posts", response_model=list[schemas.Post])
-def get_posts(db: Session = Depends(database.get_db)):
-    logger.info("收到获取帖子请求")
+def get_all_posts(skip: int = 0, limit: int = 100, db: Session = Depends(database.get_db)):
+    posts = db.query(models.Post).order_by(models.Post.created_at.desc()).offset(skip).limit(limit).all()
+    return posts
+
+# ==================== AI 问答接口 ====================
+@app.post("/api/ai/chat")
+def ai_campus_chat(request: ChatRequest):
+    if not request.user_message:
+        raise HTTPException(status_code=400, detail="发点什么吧~")
+    
+    SYSTEM_PROMPT = """
+    你现在是“校园圈”的专属 AI 助手，名叫“小圈”。你的人设是一位热情、幽默、懂很多的大学长/大学姐。
+    你的任务是解答同学们关于校园生活、学习指南、吃喝玩乐的疑问。
+    规则：
+    1. 语气亲切自然，多使用 emoji ✨🎓。
+    2. 如果遇到你不知道的具体学校规定，请建议同学在【校园圈论坛】发帖求助。
+    3. 字数控制在 200 字以内。
+    """
+
     try:
-        posts = db.query(models.Post).order_by(models.Post.id.desc()).all()
-        logger.info(f"成功获取 {len(posts)} 条帖子")
-        return posts
-    except Exception as e:
-        logger.error(f"获取帖子失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"获取帖子失败: {str(e)}")
-
-
-# 接口 2：发布新帖子
-@app.post("/api/posts", response_model=schemas.Post)
-def create_post(post: schemas.PostCreate, db: Session = Depends(database.get_db)):
-    logger.info(f"收到发布帖子请求: {post.title}")
-    try:
-        db_post = models.Post(title=post.title, content=post.content)
-        db.add(db_post)
-        db.commit()
-        db.refresh(db_post)
-        logger.info(f"成功发布帖子: ID={db_post.id}, 标题={db_post.title}")
-        return db_post
-    except Exception as e:
-        db.rollback()
-        logger.error(f"发布帖子失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"发布帖子失败: {str(e)}")
-
-
-# 接口3：获取指定日期的预约占用情况
-@app.get("/api/appointments/status/{date}")
-def get_status(date: str, db: Session = Depends(database.get_db)):
-    # 查找数据库中该日期所有已被约的记录
-    booked_slots = (
-        db.query(models.Appointment).filter(models.Appointment.date == date).all()
-    )
-    # 只返回时间段列表，例如 ["10:00 ~ 10:30", "11:00 ~ 11:30"]
-    return [slot.time_slot for slot in booked_slots]
-
-
-# 接口4：提交预约请求
-@app.post("/api/appointments")
-def create_appointment(
-    data: schemas.AppointmentCreate, db: Session = Depends(database.get_db)
-):
-    # --- 核心：防冲突检查 ---
-    # 在存入之前，先查一遍：这个日期和时间段是否已经存在？
-    exists = (
-        db.query(models.Appointment)
-        .filter(
-            models.Appointment.date == data.date,
-            models.Appointment.time_slot == data.time_slot,
+        response = ai_client.chat.completions.create(
+            model="Qwen/Qwen2.5-7B-Instruct", 
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": request.user_message}
+            ],
+            temperature=0.7 
         )
-        .first()
-    )
+        ai_reply = response.choices[0].message.content
+        return {"success": True, "reply": ai_reply}
+        
+    except Exception as e:
+        logger.error(f"硅基流动调用报错: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="小圈学长/学姐的脑子短路了，稍后再试吧~")
 
-    if exists:
-        # 如果已经存在，直接抛出 400 错误，告诉前端“被人抢先了”
-        raise HTTPException(status_code=400, detail="该时间段已被预约，请选择其他时段")
-
-    # 如果不存在，才执行写入
-    db_appointment = models.Appointment(**data.dict())
-    db.add(db_appointment)
-    db.commit()
-    return {"message": "预约成功"}
+# 注意：下面的路由如果是启动应用（如 if __name__ == '__main__':）需要保留在文件最底部
