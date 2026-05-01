@@ -5,3 +5,7 @@
  * - 生产打包环境 (npm run build): https://campus-api-bkfua8a9gdcfaff3.eastasia-01.azurewebsites.net
  */
 export const API_BASE = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
+export function getAuthToken() {
+  return localStorage.getItem('campus_circle_token') || '';
+}

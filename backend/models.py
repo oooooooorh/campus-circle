@@ -1,6 +1,18 @@
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean
+from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, ForeignKey
 from datetime import datetime
 import database
+
+
+class User(database.Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String(50), unique=True, index=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+    display_name = Column(String(50), nullable=True)
+    bio = Column(String(200), nullable=True)
+    avatar_url = Column(String(300), nullable=True)
 
 
 class Post(database.Base):
@@ -10,12 +22,13 @@ class Post(database.Base):
     title = Column(String(100), index=True)  # 标题
     content = Column(Text)  # 内容
     created_at = Column(DateTime, default=datetime.now)  # 发帖时间
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
-class Appointment(database.Base):
-    __tablename__ = "appointments"  # 数据库里的表名
+
+class Favorite(database.Base):
+    __tablename__ = "favorites"
 
     id = Column(Integer, primary_key=True, index=True)
-    date = Column(String, index=True)      # 记录日期，如 "2023-10-28"
-    time_slot = Column(String)            # 记录时间段，如 "14:30 ~ 15:00"
-    user_name = Column(String)            # 预约人姓名
-    is_completed = Column(Boolean, default=False) # 是否已完成  
+    user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    post_id = Column(Integer, ForeignKey("posts.id"), index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.now)

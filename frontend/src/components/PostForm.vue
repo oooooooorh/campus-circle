@@ -51,9 +51,9 @@
 
 <script setup>
 import { ref, computed } from 'vue'
-import { API_BASE } from '../config.js'
+import { API_BASE, getAuthToken } from '../config.js'
 
-const emit = defineEmits(['post-created'])
+const emit = defineEmits(['post-success'])
 
 const form = ref({
   title: '',
@@ -71,12 +71,19 @@ const isValid = computed(() => {
 const submitPost = async () => {
   if (!isValid.value) return
   
-  isSubmitting.value = true
+  loading.value = true
+  error.value = ''
+  successMsg.value = ''
   try {
+    const token = getAuthToken()
+    if (!token) {
+      throw new Error('请先登录后再发布')
+    }
     const response = await fetch(`${API_BASE}/api/posts`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`
       },
       body: JSON.stringify(form.value)
     })
@@ -87,7 +94,7 @@ const submitPost = async () => {
       form.value = { title: '', content: '' }
       successMsg.value = '发布成功！你的声音已被世界听到。'
       setTimeout(() => { successMsg.value = '' }, 3000)
-      emit('post-created')
+      emit('post-success')
     } else {
       error.value = `发布失败: ${data.detail || '未知错误，请稍后再试'}`
     }

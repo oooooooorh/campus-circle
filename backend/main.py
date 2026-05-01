@@ -1,15 +1,23 @@
 from fastapi import FastAPI, Depends, HTTPException
+from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy import text, or_
 import logging
 import asyncio
 import json
 import sys
 import os
+from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 from playwright.async_api import async_playwright
 from openai import OpenAI
 from pydantic import BaseModel
+from jose import jwt, JWTError
+import base64
+import hashlib
+import hmac
+import secrets
 
 # 添加后端目录到 Python 路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -95,6 +103,98 @@ app.add_middleware(
     allow_headers=["*"], # 允许所有请求头
 )
 
+# ==================== 站内账号鉴权（JWT）====================
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+JWT_SECRET = os.getenv("JWT_SECRET", "dev-only-change-me")
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRES_MINUTES = int(os.getenv("JWT_EXPIRES_MINUTES", "43200"))  # 默认30天
+
+
+PBKDF2_ITERATIONS = int(os.getenv("PBKDF2_ITERATIONS", "210000"))
+
+
+def hash_password(password: str) -> str:
+    # pbkdf2_sha256$<iterations>$<salt_b64>$<hash_b64>
+    salt = secrets.token_bytes(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PBKDF2_ITERATIONS, dklen=32)
+    salt_b64 = base64.urlsafe_b64encode(salt).decode("ascii").rstrip("=")
+    dk_b64 = base64.urlsafe_b64encode(dk).decode("ascii").rstrip("=")
+    return f"pbkdf2_sha256${PBKDF2_ITERATIONS}${salt_b64}${dk_b64}"
+
+
+def verify_password(plain_password: str, password_hash: str) -> bool:
+    try:
+        algo, iters_s, salt_b64, dk_b64 = password_hash.split("$", 3)
+        if algo != "pbkdf2_sha256":
+            return False
+        iters = int(iters_s)
+        pad = "=" * (-len(salt_b64) % 4)
+        salt = base64.urlsafe_b64decode(salt_b64 + pad)
+        pad2 = "=" * (-len(dk_b64) % 4)
+        expected = base64.urlsafe_b64decode(dk_b64 + pad2)
+        actual = hashlib.pbkdf2_hmac("sha256", plain_password.encode("utf-8"), salt, iters, dklen=len(expected))
+        return hmac.compare_digest(actual, expected)
+    except Exception:
+        return False
+
+
+def create_access_token(*, sub: str, expires_delta: timedelta) -> str:
+    now = datetime.utcnow()
+    payload = {"sub": sub, "iat": int(now.timestamp()), "exp": now + expires_delta}
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+
+def get_current_user(
+    token: str = Depends(oauth2_scheme),
+    db: Session = Depends(database.get_db),
+) -> models.User:
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        username = payload.get("sub")
+        if not username:
+            raise HTTPException(status_code=401, detail="未登录")
+    except JWTError:
+        raise HTTPException(status_code=401, detail="登录已过期或无效")
+
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="用户不存在")
+    return user
+
+
+# ==================== SQLite 轻量迁移（开发用）====================
+def _sqlite_column_exists(db: Session, table: str, column: str) -> bool:
+    rows = db.execute(text(f"PRAGMA table_info({table})")).fetchall()
+    return any(r[1] == column for r in rows)
+
+
+def ensure_sqlite_schema():
+    # 仅对 SQLite 做轻量 ALTER TABLE（本项目默认 SQLite）
+    if not str(database.engine.url).startswith("sqlite"):
+        return
+    db = database.SessionLocal()
+    try:
+        # posts.user_id：旧库没有该列会导致查询崩溃
+        if _sqlite_column_exists(db, "posts", "id") and not _sqlite_column_exists(db, "posts", "user_id"):
+            db.execute(text("ALTER TABLE posts ADD COLUMN user_id INTEGER"))
+            db.commit()
+
+        # users profile columns
+        if _sqlite_column_exists(db, "users", "id") and not _sqlite_column_exists(db, "users", "display_name"):
+            db.execute(text("ALTER TABLE users ADD COLUMN display_name VARCHAR(50)"))
+            db.commit()
+        if _sqlite_column_exists(db, "users", "id") and not _sqlite_column_exists(db, "users", "bio"):
+            db.execute(text("ALTER TABLE users ADD COLUMN bio VARCHAR(200)"))
+            db.commit()
+        if _sqlite_column_exists(db, "users", "id") and not _sqlite_column_exists(db, "users", "avatar_url"):
+            db.execute(text("ALTER TABLE users ADD COLUMN avatar_url VARCHAR(300)"))
+            db.commit()
+    finally:
+        db.close()
+
+ensure_sqlite_schema()
+
 # 根路由
 @app.get("/")
 def root():
@@ -104,6 +204,91 @@ def root():
         "message": "校园圈后端服务正在运行",
         "version": "1.0.0"
     }
+
+# ==================== 注册/登录 ====================
+@app.post("/api/auth/register", response_model=schemas.UserPublic)
+def register(payload: schemas.RegisterRequest, db: Session = Depends(database.get_db)):
+    username = (payload.username or "").strip()
+    password = payload.password or ""
+    if len(username) < 3:
+        raise HTTPException(status_code=400, detail="用户名至少3位")
+    if len(password) < 6:
+        raise HTTPException(status_code=400, detail="密码至少6位")
+
+    exists = db.query(models.User).filter(models.User.username == username).first()
+    if exists:
+        raise HTTPException(status_code=409, detail="用户名已存在")
+
+    user = models.User(username=username, password_hash=hash_password(password))
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@app.post("/api/auth/login", response_model=schemas.TokenResponse)
+def login(payload: schemas.LoginRequest, db: Session = Depends(database.get_db)):
+    username = (payload.username or "").strip()
+    password = payload.password or ""
+    user = db.query(models.User).filter(models.User.username == username).first()
+    if not user or not verify_password(password, user.password_hash):
+        raise HTTPException(status_code=401, detail="用户名或密码错误")
+
+    token = create_access_token(
+        sub=user.username,
+        expires_delta=timedelta(minutes=JWT_EXPIRES_MINUTES),
+    )
+    return {"access_token": token, "token_type": "bearer"}
+
+
+@app.get("/api/me", response_model=schemas.UserPublic)
+def me(current_user: models.User = Depends(get_current_user)):
+    return current_user
+
+
+@app.patch("/api/me", response_model=schemas.UserPublic)
+def update_me(
+    payload: schemas.UserUpdate,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if payload.display_name is not None:
+        current_user.display_name = (payload.display_name or "").strip() or None
+    if payload.bio is not None:
+        current_user.bio = (payload.bio or "").strip() or None
+    if payload.avatar_url is not None:
+        current_user.avatar_url = (payload.avatar_url or "").strip() or None
+    db.add(current_user)
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+
+@app.get("/api/me/posts", response_model=list[schemas.Post])
+def my_posts(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+    skip: int = 0,
+    limit: int = 100,
+):
+    posts = (
+        db.query(models.Post)
+        .filter(models.Post.user_id == current_user.id)
+        .order_by(models.Post.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    return posts
+
+
+# ==================== 公开用户信息 ====================
+@app.get("/api/users/{user_id}", response_model=schemas.PublicUser)
+def get_public_user(user_id: int, db: Session = Depends(database.get_db)):
+    user = db.query(models.User).filter(models.User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return schemas.PublicUser.model_validate(user)
 
 
 # ==================== 课表爬虫相关接口 ====================
@@ -162,9 +347,162 @@ async def get_schedule(info: schemas.LoginInfo):
 
 # ==================== 获取全部帖子 (改进版 支持分页或者一次性获取) ====================
 @app.get("/api/posts", response_model=list[schemas.Post])
-def get_all_posts(skip: int = 0, limit: int = 100, db: Session = Depends(database.get_db)):
-    posts = db.query(models.Post).order_by(models.Post.created_at.desc()).offset(skip).limit(limit).all()
-    return posts
+def get_all_posts(
+    skip: int = 0,
+    limit: int = 100,
+    q: str | None = None,
+    db: Session = Depends(database.get_db),
+):
+    query = db.query(models.Post)
+    if q and q.strip():
+        kw = f"%{q.strip()}%"
+        query = (
+            query.outerjoin(models.User, models.Post.user_id == models.User.id).filter(
+                or_(
+                    models.Post.title.ilike(kw),
+                    models.Post.content.ilike(kw),
+                    models.User.username.ilike(kw),
+                    models.User.display_name.ilike(kw),
+                )
+            )
+        )
+
+    posts = query.order_by(models.Post.created_at.desc()).offset(skip).limit(limit).all()
+
+    user_ids = [p.user_id for p in posts if p.user_id]
+    author_map = {}
+    if user_ids:
+        users = db.query(models.User).filter(models.User.id.in_(list(set(user_ids)))).all()
+        author_map = {u.id: u for u in users}
+
+    result = []
+    for p in posts:
+        item = schemas.Post.model_validate(p)
+        if p.user_id and p.user_id in author_map:
+            item.author = schemas.UserPublic.model_validate(author_map[p.user_id])
+        result.append(item)
+    return result
+
+
+@app.get("/api/posts/{post_id}", response_model=schemas.Post)
+def get_post_detail(post_id: int, db: Session = Depends(database.get_db)):
+    post = db.query(models.Post).filter(models.Post.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="帖子不存在")
+
+    item = schemas.Post.model_validate(post)
+    if post.user_id:
+        u = db.query(models.User).filter(models.User.id == post.user_id).first()
+        if u:
+            item.author = schemas.UserPublic.model_validate(u)
+    return item
+
+# ==================== 发布帖子 ====================
+@app.post("/api/posts", response_model=schemas.Post)
+def create_post(
+    payload: schemas.PostCreate,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    title = (payload.title or "").strip()
+    content = (payload.content or "").strip()
+    if not title or not content:
+        raise HTTPException(status_code=400, detail="标题和内容不能为空")
+
+    post = models.Post(title=title, content=content, user_id=current_user.id)
+    db.add(post)
+    db.commit()
+    db.refresh(post)
+    return post
+
+
+# ==================== 收藏（Favorite）====================
+@app.get("/api/me/favorites/ids", response_model=list[int])
+def my_favorite_ids(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    rows = db.query(models.Favorite.post_id).filter(models.Favorite.user_id == current_user.id).all()
+    return [r[0] for r in rows]
+
+
+@app.get("/api/me/favorites", response_model=list[schemas.Post])
+def my_favorites(
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+    skip: int = 0,
+    limit: int = 100,
+):
+    fav_post_ids = (
+        db.query(models.Favorite.post_id)
+        .filter(models.Favorite.user_id == current_user.id)
+        .order_by(models.Favorite.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+        .all()
+    )
+    ids = [r[0] for r in fav_post_ids]
+    if not ids:
+        return []
+
+    posts = db.query(models.Post).filter(models.Post.id.in_(ids)).all()
+    post_map = {p.id: p for p in posts}
+
+    # author hydrate
+    user_ids = [p.user_id for p in posts if p.user_id]
+    author_map = {}
+    if user_ids:
+        users = db.query(models.User).filter(models.User.id.in_(list(set(user_ids)))).all()
+        author_map = {u.id: u for u in users}
+
+    result = []
+    for pid in ids:
+        p = post_map.get(pid)
+        if not p:
+            continue
+        item = schemas.Post.model_validate(p)
+        if p.user_id and p.user_id in author_map:
+            item.author = schemas.UserPublic.model_validate(author_map[p.user_id])
+        result.append(item)
+    return result
+
+
+@app.post("/api/posts/{post_id}/favorite")
+def favorite_post(
+    post_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    post = db.query(models.Post).filter(models.Post.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="帖子不存在")
+
+    exists = (
+        db.query(models.Favorite)
+        .filter(models.Favorite.user_id == current_user.id, models.Favorite.post_id == post_id)
+        .first()
+    )
+    if exists:
+        return {"success": True}
+
+    fav = models.Favorite(user_id=current_user.id, post_id=post_id)
+    db.add(fav)
+    db.commit()
+    return {"success": True}
+
+
+@app.delete("/api/posts/{post_id}/favorite")
+def unfavorite_post(
+    post_id: int,
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    q = db.query(models.Favorite).filter(
+        models.Favorite.user_id == current_user.id, models.Favorite.post_id == post_id
+    )
+    q.delete()
+    db.commit()
+    return {"success": True}
 
 # ==================== AI 问答接口 ====================
 @app.post("/api/ai/chat")

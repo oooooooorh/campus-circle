@@ -1,9 +1,20 @@
 <template>
   <div class="forum-container">
+    <div v-if="toast" class="toast">{{ toast }}</div>
     <!-- Header -->
     <header class="page-header">
       <h1>校园交流圈</h1>
       <p>分享你的校园生活，遇见有趣的灵魂</p>
+
+      <!-- Global Search -->
+      <div class="search-bar glass-panel">
+        <input
+          v-model="search"
+          class="search-input"
+          placeholder="搜索帖子标题/内容/作者..."
+        />
+        <button v-if="search" class="search-btn" @click="clearSearch">清空</button>
+      </div>
     </header>
 
     <!-- 引入发帖零件 -->
@@ -27,8 +38,8 @@
       <!-- 空状态 -->
       <div v-else-if="posts.length === 0" class="state-container empty-state glass-panel">
         <span class="icon">🌱</span>
-        <p>这里还是一片荒芜</p>
-        <span>快来发布第一条动态，抢占沙发！</span>
+        <p>{{ search ? '没有搜到相关内容' : '这里还是一片荒芜' }}</p>
+        <span v-if="!search">快来发布第一条动态，抢占沙发！</span>
       </div>
 
       <!-- 帖子列表 -->
@@ -36,11 +47,24 @@
         <transition-group name="list">
           <div v-for="post in posts" :key="post.id" class="post-card glass-panel">
             <div class="post-header">
-              <div class="avatar-placeholder">
-                {{ post.title.charAt(0).toUpperCase() }}
+              <router-link
+                v-if="post.author && post.user_id"
+                class="avatar-placeholder"
+                :to="`/user/${post.user_id}`"
+                :title="authorName(post)"
+              >
+                {{ authorInitial(post) }}
+              </router-link>
+              <div v-else class="avatar-placeholder">
+                {{ authorInitial(post) }}
               </div>
               <div class="post-meta">
                 <h4 class="post-title">{{ post.title }}</h4>
+                <div class="post-author" v-if="post.author && post.user_id">
+                  <router-link :to="`/user/${post.user_id}`" class="author-link">
+                    {{ authorName(post) }}
+                  </router-link>
+                </div>
                 <div class="post-time">
                   <span class="time-icon">🕒</span> {{ formatDate(post.created_at) }}
                 </div>
@@ -50,9 +74,33 @@
               <p>{{ post.content }}</p>
             </div>
             <div class="post-footer">
-              <button class="action-btn"><span class="icon">👍</span> 赞</button>
-              <button class="action-btn"><span class="icon">💬</span> 评论</button>
-              <button class="action-btn"><span class="icon">🔁</span> 转发</button>
+              <button class="action-btn" title="点赞（占位）" @click.prevent>
+                <svg class="icon-mini" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M7 22V10M7 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h3M7 10l4-7a2 2 0 0 1 3 2v5h5a2 2 0 0 1 2 2l-2 8a2 2 0 0 1-2 2H7" />
+                </svg>
+              </button>
+              <button class="action-btn" title="评论（占位）" @click.prevent>
+                <svg class="icon-mini" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" />
+                </svg>
+              </button>
+              <button class="action-btn" title="转发（复制链接）" @click="copyPostLink(post.id)">
+                <svg class="icon-mini" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M16 3h5v5" />
+                  <path d="M21 3l-7.5 7.5" />
+                  <path d="M13.5 10.5H9a6 6 0 0 0 0 12h3" />
+                </svg>
+              </button>
+              <button
+                class="action-btn"
+                :class="{ 'fav-active': isFavorited(post.id) }"
+                title="收藏"
+                @click="toggleFavorite(post.id)"
+              >
+                <svg class="icon-mini" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 17.3l-6.18 3.7 1.64-7.03L2 8.97l7.19-.61L12 2l2.81 6.36 7.19.61-5.46 4.99 1.64 7.03z" />
+                </svg>
+              </button>
             </div>
           </div>
         </transition-group>
@@ -62,18 +110,29 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import PostForm from '../components/PostForm.vue'
-import { API_BASE } from '../config.js'
+import { API_BASE, getAuthToken } from '../config.js'
 
 const posts = ref([])
 const loading = ref(false)
 const error = ref('')
+const search = ref('')
+let searchTimer = null
+const favoriteIds = ref(new Set())
+const router = useRouter()
+const toast = ref('')
+let toastTimer = null
 
 // 获取帖子列表的函数
 const fetchPosts = async () => {
+  loading.value = true
+  error.value = ''
   try {
-    const response = await fetch(`${API_BASE}/api/posts`)
+    const q = search.value.trim()
+    const url = q ? `${API_BASE}/api/posts?q=${encodeURIComponent(q)}` : `${API_BASE}/api/posts`
+    const response = await fetch(url)
     if (response.ok) {
       posts.value = await response.json()
     } else {
@@ -83,6 +142,27 @@ const fetchPosts = async () => {
     error.value = `获取动态失败: ${err.message}`
   } finally {
     loading.value = false
+  }
+}
+
+async function loadFavoriteIds() {
+  try {
+    const token = getAuthToken()
+    if (!token) {
+      favoriteIds.value = new Set()
+      return
+    }
+    const res = await fetch(`${API_BASE}/api/me/favorites/ids`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) {
+      favoriteIds.value = new Set()
+      return
+    }
+    const data = await res.json()
+    favoriteIds.value = new Set(Array.isArray(data) ? data : [])
+  } catch {
+    favoriteIds.value = new Set()
   }
 }
 
@@ -110,13 +190,100 @@ const formatDate = (dateString) => {
 // 页面一加载就执行
 onMounted(() => {
   fetchPosts()
+  loadFavoriteIds()
 })
+
+watch(search, () => {
+  if (searchTimer) clearTimeout(searchTimer)
+  searchTimer = setTimeout(() => {
+    fetchPosts()
+  }, 300)
+})
+
+const clearSearch = () => {
+  search.value = ''
+}
+
+const authorName = (post) => {
+  if (post?.author?.display_name) return post.author.display_name
+  if (post?.author?.username) return post.author.username
+  return '匿名'
+}
+
+const authorInitial = (post) => {
+  const name = authorName(post)
+  return String(name).charAt(0).toUpperCase()
+}
+
+const isFavorited = (postId) => {
+  return favoriteIds.value.has(postId)
+}
+
+async function toggleFavorite(postId) {
+  const token = getAuthToken()
+  if (!token) {
+    router.push('/login')
+    return
+  }
+  const fav = isFavorited(postId)
+  const method = fav ? 'DELETE' : 'POST'
+  const res = await fetch(`${API_BASE}/api/posts/${postId}/favorite`, {
+    method,
+    headers: { Authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}))
+    error.value = data.detail || '操作失败'
+    return
+  }
+  const next = new Set(favoriteIds.value)
+  if (fav) next.delete(postId)
+  else next.add(postId)
+  favoriteIds.value = next
+}
+
+async function copyPostLink(postId) {
+  try {
+    const url = `${window.location.origin}/post/${postId}`
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(url)
+    } else {
+      const input = document.createElement('input')
+      input.value = url
+      document.body.appendChild(input)
+      input.select()
+      document.execCommand('copy')
+      document.body.removeChild(input)
+    }
+    toast.value = '已复制链接'
+  } catch (e) {
+    toast.value = '复制失败，请手动复制地址栏链接'
+  } finally {
+    if (toastTimer) clearTimeout(toastTimer)
+    toastTimer = setTimeout(() => (toast.value = ''), 1800)
+  }
+}
 </script>
 
 <style scoped>
 .forum-container {
   max-width: 800px;
   margin: 0 auto;
+}
+
+.toast {
+  position: fixed;
+  top: 90px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.88);
+  color: white;
+  padding: 10px 14px;
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.9rem;
+  z-index: 9999;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.2);
 }
 
 /* Page Header */
@@ -132,8 +299,46 @@ onMounted(() => {
 }
 
 .page-header p {
-  color: var(--text-secondary);
+  background: linear-gradient(90deg, #8b5cf6 0%, #a855f7 45%, #6366f1 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
   font-size: 1.1rem;
+}
+
+/* Search */
+.search-bar {
+  margin: 1rem auto 0;
+  max-width: 520px;
+  padding: 0.6rem;
+  border-radius: var(--radius-pill);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.search-input {
+  flex: 1;
+  border: none;
+  outline: none;
+  background: transparent;
+  padding: 0.6rem 0.8rem;
+  font-size: 1rem;
+  color: var(--text-primary);
+}
+
+.search-btn {
+  border: none;
+  cursor: pointer;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius-pill);
+  background: rgba(99, 102, 241, 0.12);
+  color: var(--primary-color);
+  font-weight: 700;
+}
+
+.search-btn:hover {
+  background: rgba(99, 102, 241, 0.18);
 }
 
 /* States */
@@ -211,6 +416,23 @@ onMounted(() => {
   flex: 1;
 }
 
+.post-author {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.2rem;
+}
+
+.author-link {
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.author-link:hover {
+  color: var(--primary-color);
+  text-decoration: underline;
+}
+
 .post-title {
   margin: 0 0 0.25rem 0;
   font-size: 1.1rem;
@@ -234,28 +456,44 @@ onMounted(() => {
 
 .post-footer {
   display: flex;
-  gap: 1rem;
+  gap: 0.25rem;
   border-top: 1px solid var(--border-color);
   padding-top: 1rem;
 }
 
 .action-btn {
-  background: none;
-  border: none;
-  color: var(--text-light);
-  display: flex;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-secondary);
+  display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  font-size: 0.9rem;
+  justify-content: center;
+  gap: 0.35rem;
+  font-size: 0.95rem;
   cursor: pointer;
-  padding: 0.5rem 0.8rem;
-  border-radius: var(--radius-sm);
+  padding: 0.45rem 0.6rem;
+  border-radius: 999px;
   transition: all 0.2s;
 }
 
 .action-btn:hover {
   background: rgba(99, 102, 241, 0.1);
   color: var(--primary-color);
+}
+
+.icon-mini {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.fav-active {
+  color: #7c3aed;
+  background: rgba(124, 58, 237, 0.12);
 }
 
 /* Animations */
