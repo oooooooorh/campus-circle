@@ -1,6 +1,7 @@
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 from sqlalchemy import text, or_
 import logging
@@ -77,6 +78,12 @@ async def lifespan(app: FastAPI):
 
 # 创建 FastAPI 应用
 app = FastAPI(title="校园圈后端中心", lifespan=lifespan)
+
+# 静态文件（头像等）
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+AVATAR_DIR = os.path.join(STATIC_DIR, "avatars")
+os.makedirs(AVATAR_DIR, exist_ok=True)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # 如果之前的 @app.on_event("startup") 还存在，可以安全地注释或删除
 # 为了兼容之前的代码结构，把它们替换掉:
@@ -161,6 +168,28 @@ def get_current_user(
     if not user:
         raise HTTPException(status_code=401, detail="用户不存在")
     return user
+
+def _normalize_tag(name: str) -> str:
+    n = (name or "").strip()
+    n = " ".join(n.split())
+    return n
+
+
+def _get_tags_for_posts(db: Session, post_ids: list[int]) -> dict[int, list[str]]:
+    if not post_ids:
+        return {}
+    rows = (
+        db.query(models.PostTag.post_id, models.Tag.name)
+        .join(models.Tag, models.PostTag.tag_id == models.Tag.id)
+        .filter(models.PostTag.post_id.in_(post_ids))
+        .all()
+    )
+    m: dict[int, list[str]] = {}
+    for pid, name in rows:
+        m.setdefault(pid, []).append(name)
+    for pid in m:
+        m[pid] = sorted(set(m[pid]))
+    return m
 
 
 # ==================== SQLite 轻量迁移（开发用）====================
@@ -264,6 +293,38 @@ def update_me(
     return current_user
 
 
+@app.post("/api/me/avatar", response_model=schemas.UserPublic)
+def upload_my_avatar(
+    file: UploadFile = File(...),
+    db: Session = Depends(database.get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=400, detail="请上传图片文件")
+
+    # 简单白名单：常见图片扩展
+    ext = ""
+    if file.filename and "." in file.filename:
+        ext = "." + file.filename.rsplit(".", 1)[-1].lower().strip()
+    if ext not in [".png", ".jpg", ".jpeg", ".webp", ".gif", ""]:
+        raise HTTPException(status_code=400, detail="不支持的图片格式")
+
+    filename = f"user_{current_user.id}_{int(datetime.utcnow().timestamp())}{ext or '.png'}"
+    save_path = os.path.join(AVATAR_DIR, filename)
+
+    data = file.file.read()
+    if len(data) > 2 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="图片不能超过 2MB")
+    with open(save_path, "wb") as f:
+        f.write(data)
+
+    current_user.avatar_url = f"/static/avatars/{filename}"
+    db.add(current_user)
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+
 @app.get("/api/me/posts", response_model=list[schemas.Post])
 def my_posts(
     db: Session = Depends(database.get_db),
@@ -279,7 +340,13 @@ def my_posts(
         .limit(limit)
         .all()
     )
-    return posts
+    tag_map = _get_tags_for_posts(db, [p.id for p in posts])
+    result = []
+    for p in posts:
+        item = schemas.Post.model_validate(p)
+        item.tags = tag_map.get(p.id, [])
+        result.append(item)
+    return result
 
 
 # ==================== 公开用户信息 ====================
@@ -357,14 +424,19 @@ def get_all_posts(
     if q and q.strip():
         kw = f"%{q.strip()}%"
         query = (
-            query.outerjoin(models.User, models.Post.user_id == models.User.id).filter(
+            query.outerjoin(models.User, models.Post.user_id == models.User.id)
+            .outerjoin(models.PostTag, models.PostTag.post_id == models.Post.id)
+            .outerjoin(models.Tag, models.PostTag.tag_id == models.Tag.id)
+            .filter(
                 or_(
                     models.Post.title.ilike(kw),
                     models.Post.content.ilike(kw),
                     models.User.username.ilike(kw),
                     models.User.display_name.ilike(kw),
+                    models.Tag.name.ilike(kw),
                 )
             )
+            .distinct()
         )
 
     posts = query.order_by(models.Post.created_at.desc()).offset(skip).limit(limit).all()
@@ -375,11 +447,14 @@ def get_all_posts(
         users = db.query(models.User).filter(models.User.id.in_(list(set(user_ids)))).all()
         author_map = {u.id: u for u in users}
 
+    tag_map = _get_tags_for_posts(db, [p.id for p in posts])
+
     result = []
     for p in posts:
         item = schemas.Post.model_validate(p)
         if p.user_id and p.user_id in author_map:
             item.author = schemas.UserPublic.model_validate(author_map[p.user_id])
+        item.tags = tag_map.get(p.id, [])
         result.append(item)
     return result
 
@@ -395,6 +470,7 @@ def get_post_detail(post_id: int, db: Session = Depends(database.get_db)):
         u = db.query(models.User).filter(models.User.id == post.user_id).first()
         if u:
             item.author = schemas.UserPublic.model_validate(u)
+    item.tags = _get_tags_for_posts(db, [post.id]).get(post.id, [])
     return item
 
 # ==================== 发布帖子 ====================
@@ -413,7 +489,33 @@ def create_post(
     db.add(post)
     db.commit()
     db.refresh(post)
-    return post
+
+    # tags
+    tags = payload.tags or []
+    norm = []
+    for t in tags:
+        n = _normalize_tag(t)
+        if n:
+            norm.append(n)
+    # 去重 & 限制 7 个
+    norm = list(dict.fromkeys(norm))[:7]
+    for name in norm:
+        if len(name) > 20:
+            raise HTTPException(status_code=400, detail="单个分区标签最多20个字符")
+        tag = db.query(models.Tag).filter(models.Tag.name == name).first()
+        if not tag:
+            tag = models.Tag(name=name)
+            db.add(tag)
+            db.commit()
+            db.refresh(tag)
+        link = models.PostTag(post_id=post.id, tag_id=tag.id)
+        db.add(link)
+    db.commit()
+
+    item = schemas.Post.model_validate(post)
+    item.author = schemas.UserPublic.model_validate(current_user)
+    item.tags = norm
+    return item
 
 
 # ==================== 收藏（Favorite）====================
@@ -455,6 +557,8 @@ def my_favorites(
         users = db.query(models.User).filter(models.User.id.in_(list(set(user_ids)))).all()
         author_map = {u.id: u for u in users}
 
+    tag_map = _get_tags_for_posts(db, [p.id for p in posts])
+
     result = []
     for pid in ids:
         p = post_map.get(pid)
@@ -463,6 +567,7 @@ def my_favorites(
         item = schemas.Post.model_validate(p)
         if p.user_id and p.user_id in author_map:
             item.author = schemas.UserPublic.model_validate(author_map[p.user_id])
+        item.tags = tag_map.get(p.id, [])
         result.append(item)
     return result
 

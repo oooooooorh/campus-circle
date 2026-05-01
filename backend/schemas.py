@@ -55,6 +55,7 @@ class ScheduleItem(BaseModel):
 class PostCreate(BaseModel):
     title: str
     content: str
+    tags: Optional[list[str]] = None
 
 
 # 后端返回给前端的数据格式（多了 ID 和时间）
@@ -65,6 +66,7 @@ class Post(BaseModel):
     created_at: datetime
     user_id: Optional[int] = None
     author: Optional[UserPublic] = None
+    tags: list[str] = []
 
     class Config:
         from_attributes = True  # 允许从 ORM 模型转换

@@ -27,6 +27,9 @@
       </div>
 
       <h1 class="title">{{ post.title }}</h1>
+      <div v-if="post.tags && post.tags.length" class="tag-row">
+        <span v-for="t in post.tags" :key="t" class="tag-pill">{{ t }}</span>
+      </div>
       <div class="content">{{ post.content }}</div>
     </div>
   </div>
@@ -82,6 +85,8 @@ onMounted(async () => {
 .author:hover { color: var(--primary-color); text-decoration: underline; }
 .dot { opacity: 0.6; }
 .title { margin: 14px 0 10px; font-size: 1.8rem; color: var(--text-primary); }
+.tag-row{ display:flex; flex-wrap:wrap; gap:6px; margin: 4px 0 14px; }
+.tag-pill{ font-size:0.78rem; padding:0.18rem 0.55rem; border-radius:999px; border:1px solid rgba(124,58,237,0.18); background: rgba(124,58,237,0.10); color:#6d28d9; font-weight:800; }
 .content { color: var(--text-secondary); line-height: 1.8; white-space: pre-wrap; }
 .err { color: var(--error); }
 .spinner { width: 40px; height: 40px; border: 4px solid rgba(99, 102, 241, 0.1); border-left-color: var(--primary-color); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 12px; }

@@ -60,6 +60,9 @@
               </div>
               <div class="post-meta">
                 <h4 class="post-title">{{ post.title }}</h4>
+              <div v-if="post.tags && post.tags.length" class="tag-row">
+                <span v-for="t in post.tags" :key="t" class="tag-pill">{{ t }}</span>
+              </div>
                 <div class="post-author" v-if="post.author && post.user_id">
                   <router-link :to="`/user/${post.user_id}`" class="author-link">
                     {{ authorName(post) }}
@@ -420,6 +423,22 @@ async function copyPostLink(postId) {
   font-size: 0.9rem;
   color: var(--text-secondary);
   margin-bottom: 0.2rem;
+}
+
+.tag-row{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 6px;
+}
+.tag-pill{
+  font-size: 0.78rem;
+  padding: 0.18rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid rgba(124, 58, 237, 0.18);
+  background: rgba(124, 58, 237, 0.10);
+  color: #6d28d9;
+  font-weight: 700;
 }
 
 .author-link {

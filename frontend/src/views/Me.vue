@@ -21,6 +21,10 @@
           <div class="k">注册时间</div>
           <div class="v">{{ formatDate(me?.created_at) }}</div>
         </div>
+        <div class="actions">
+          <button class="btn btn-secondary" @click="switchAccount">切换账号</button>
+          <button class="btn btn-danger" @click="logoutNow">退出登录</button>
+        </div>
       </section>
 
       <section class="card glass-panel">
@@ -29,11 +33,21 @@
         <div v-if="success" class="alert alert-success">{{ success }}</div>
 
         <div class="form">
+          <label class="label">头像上传</label>
+          <div class="avatar-row">
+            <img v-if="avatarPreview" class="avatar-preview" :src="avatarPreview" alt="avatar" />
+            <div v-else class="avatar-preview placeholder">无</div>
+            <div class="avatar-actions">
+              <input class="file" type="file" accept="image/*" @change="onAvatarFile" :disabled="saving" />
+              <div class="tip">支持 PNG/JPG/WebP/GIF，≤2MB</div>
+            </div>
+          </div>
+
           <label class="label">昵称</label>
           <input v-model="form.display_name" class="modern-input" placeholder="例如：小明" />
 
-          <label class="label">头像链接</label>
-          <input v-model="form.avatar_url" class="modern-input" placeholder="https://..." />
+          <label class="label">头像链接（可选）</label>
+          <input v-model="form.avatar_url" class="modern-input" placeholder="留空则使用上传头像" />
 
           <label class="label">个人简介</label>
           <textarea v-model="form.bio" class="modern-input textarea" rows="4" placeholder="写点什么..." />
@@ -65,6 +79,9 @@
           <div v-for="p in myPosts" :key="p.id" class="post-item">
             <div class="title">{{ p.title }}</div>
             <div class="meta">{{ formatDate(p.created_at) }}</div>
+            <div v-if="p.tags && p.tags.length" class="tag-row">
+              <span v-for="t in p.tags" :key="t" class="tag-pill">{{ t }}</span>
+            </div>
             <div class="content">{{ p.content }}</div>
           </div>
         </div>
@@ -94,6 +111,9 @@
               <span v-if="p.author">{{ p.author.display_name || p.author.username }}</span>
               <span v-else>匿名</span>
               · {{ formatDate(p.created_at) }}
+            </div>
+            <div v-if="p.tags && p.tags.length" class="tag-row">
+              <span v-for="t in p.tags" :key="t" class="tag-pill">{{ t }}</span>
             </div>
             <div class="content">{{ p.content }}</div>
           </div>
@@ -127,6 +147,14 @@ const form = ref({
   avatar_url: '',
 })
 
+const avatarPreview = ref('')
+
+function toAvatarSrc(raw) {
+  if (!raw) return ''
+  if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
+  return `${API_BASE}${raw}`
+}
+
 function formatDate(dateString) {
   if (!dateString) return '-'
   const d = new Date(dateString)
@@ -151,6 +179,9 @@ async function loadMe() {
   form.value.display_name = data.display_name || ''
   form.value.bio = data.bio || ''
   form.value.avatar_url = data.avatar_url || ''
+  avatarPreview.value = toAvatarSrc(form.value.avatar_url)
+  localStorage.setItem('campus_circle_username', data.display_name || data.username)
+  if (data.avatar_url) localStorage.setItem('campus_circle_avatar', data.avatar_url)
 }
 
 async function loadMyPosts() {
@@ -187,6 +218,42 @@ async function loadMyFavorites() {
   }
 }
 
+async function onAvatarFile(e) {
+  const file = e.target?.files?.[0]
+  if (!file) return
+  error.value = ''
+  success.value = ''
+  if (file.size > 2 * 1024 * 1024) {
+    error.value = '图片不能超过 2MB'
+    return
+  }
+  saving.value = true
+  try {
+    const token = getAuthToken()
+    const fd = new FormData()
+    fd.append('file', file)
+    const res = await fetch(`${API_BASE}/api/me/avatar`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd,
+    })
+    const data = await res.json()
+    if (!res.ok) throw new Error(data.detail || '上传失败')
+    me.value = data
+    form.value.avatar_url = data.avatar_url || ''
+    avatarPreview.value = toAvatarSrc(form.value.avatar_url)
+    localStorage.setItem('campus_circle_username', data.display_name || data.username)
+    if (data.avatar_url) localStorage.setItem('campus_circle_avatar', data.avatar_url)
+    success.value = '头像已更新'
+    setTimeout(() => (success.value = ''), 2000)
+  } catch (err) {
+    error.value = err.message || '上传失败'
+  } finally {
+    saving.value = false
+    e.target.value = ''
+  }
+}
+
 async function save() {
   saving.value = true
   error.value = ''
@@ -208,6 +275,9 @@ async function save() {
     const data = await res.json()
     if (!res.ok) throw new Error(data.detail || '保存失败')
     me.value = data
+    avatarPreview.value = toAvatarSrc(data.avatar_url || '')
+    localStorage.setItem('campus_circle_username', data.display_name || data.username)
+    if (data.avatar_url) localStorage.setItem('campus_circle_avatar', data.avatar_url)
     success.value = '保存成功'
     setTimeout(() => (success.value = ''), 2000)
   } catch (e) {
@@ -226,6 +296,16 @@ onMounted(async () => {
     loading.value = false
   }
 })
+
+function logoutNow() {
+  doLogout()
+  router.push('/login')
+}
+
+function switchAccount() {
+  doLogout()
+  router.push('/login')
+}
 </script>
 
 <style scoped>
@@ -240,14 +320,25 @@ onMounted(async () => {
 .kv:last-child { border-bottom: none; }
 .k { color: var(--text-secondary); }
 .v { color: var(--text-primary); font-weight: 600; }
+.actions { display: flex; gap: 10px; margin-top: 14px; justify-content: flex-end; flex-wrap: wrap; }
+.btn-danger { background: rgba(239, 68, 68, 0.12); color: rgba(239, 68, 68, 1); border: 1px solid rgba(239, 68, 68, 0.18); }
+.btn-danger:hover { background: rgba(239, 68, 68, 0.18); }
 .form { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
 .label { font-size: 0.9rem; color: var(--text-secondary); }
 .textarea { resize: vertical; min-height: 90px; }
+.avatar-row{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.avatar-preview{ width:64px; height:64px; border-radius:999px; object-fit:cover; border:1px solid rgba(99,102,241,0.25); background: rgba(255,255,255,0.6); display:flex; align-items:center; justify-content:center; }
+.avatar-preview.placeholder{ color: var(--text-light); font-weight:800; }
+.avatar-actions{ display:flex; flex-direction:column; gap:6px; }
+.file{ max-width: 260px; }
+.tip{ font-size:0.85rem; color: var(--text-light); }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .post-list { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
 .post-item { padding: 12px; border-radius: 12px; border: 1px solid var(--border-color); background: rgba(255,255,255,0.6); }
 .title { font-weight: 700; color: var(--text-primary); }
 .meta { color: var(--text-light); font-size: 0.85rem; margin: 4px 0 8px; }
+.tag-row{ display:flex; flex-wrap:wrap; gap:6px; margin: 0 0 10px; }
+.tag-pill{ font-size:0.78rem; padding:0.18rem 0.55rem; border-radius:999px; border:1px solid rgba(124,58,237,0.18); background: rgba(124,58,237,0.10); color:#6d28d9; font-weight:800; }
 .content { color: var(--text-secondary); line-height: 1.6; white-space: pre-wrap; }
 .state { padding: 2rem; text-align: center; }
 .spinner { width: 40px; height: 40px; border: 4px solid rgba(99, 102, 241, 0.1); border-left-color: var(--primary-color); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto 12px; }

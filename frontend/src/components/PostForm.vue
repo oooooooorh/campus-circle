@@ -38,6 +38,46 @@
           required
         ></textarea>
       </div>
+
+      <div class="input-group">
+        <div class="tag-header">
+          <span class="tag-title">分区标签（最多 7 个）</span>
+          <span class="tag-count">{{ form.tags.length }}/7</span>
+        </div>
+        <div class="tag-pick">
+          <button
+            v-for="t in presetTags"
+            :key="t"
+            type="button"
+            class="tag-pick-btn"
+            :disabled="loading || form.tags.length >= 7"
+            @click="addTagValue(t)"
+          >
+            + {{ t }}
+          </button>
+          <button
+            type="button"
+            class="tag-pick-btn tag-pick-btn-primary"
+            :disabled="loading || form.tags.length >= 7"
+            @click="promptTag"
+          >
+            + 自定义标签
+          </button>
+        </div>
+        <div class="tag-chips">
+          <button
+            v-for="(t, idx) in form.tags"
+            :key="t + idx"
+            class="tag-chip"
+            type="button"
+            @click="removeTag(idx)"
+            :disabled="loading"
+            title="点击移除"
+          >
+            {{ t }} ×
+          </button>
+        </div>
+      </div>
       <div class="form-actions">
         <button type="submit" class="btn btn-primary publish-btn" :disabled="loading">
           <span class="btn-icon" v-if="!loading">🚀</span>
@@ -57,8 +97,13 @@ const emit = defineEmits(['post-success'])
 
 const form = ref({
   title: '',
-  content: ''
+  content: '',
+  tags: []
 })
+
+const presetTags = [
+  '学习', '二手', '社团', '求助', '失物招领', '考试', '生活', '美食', '拼车', '实习'
+]
 
 const error = ref('')
 const successMsg = ref('')
@@ -67,6 +112,34 @@ const loading = ref(false)
 const isValid = computed(() => {
   return form.value.title.trim() !== '' && form.value.content.trim() !== ''
 })
+
+function normalizeTag(t) {
+  return (t || '').trim().replace(/\s+/g, ' ')
+}
+
+function addTagValue(value) {
+  const t = normalizeTag(value)
+  if (!t) return
+  if (t.length > 20) {
+    error.value = '单个分区标签最多20个字符'
+    return
+  }
+  if (form.value.tags.length >= 7) return
+  if (form.value.tags.includes(t)) {
+    return
+  }
+  form.value.tags.push(t)
+}
+
+function removeTag(idx) {
+  form.value.tags.splice(idx, 1)
+}
+
+function promptTag() {
+  const v = window.prompt('请输入分区标签（最多20字）')
+  if (v === null) return
+  addTagValue(v)
+}
 
 const submitPost = async () => {
   if (!isValid.value) return
@@ -91,7 +164,7 @@ const submitPost = async () => {
     const data = await response.json()
 
     if (response.ok) {
-      form.value = { title: '', content: '' }
+      form.value = { title: '', content: '', tags: [] }
       successMsg.value = '发布成功！你的声音已被世界听到。'
       setTimeout(() => { successMsg.value = '' }, 3000)
       emit('post-success')
@@ -172,6 +245,76 @@ const submitPost = async () => {
 
 @keyframes spin {
   100% { transform: rotate(360deg); }
+}
+
+.tag-header{
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.tag-title{
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.tag-count{
+  color: var(--text-light);
+  font-size: 0.9rem;
+}
+.tag-chips{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.tag-pick{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: 0.6rem;
+}
+
+.tag-pick-btn{
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(148, 163, 184, 0.10);
+  color: var(--text-secondary);
+  font-weight: 700;
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.tag-pick-btn:hover:enabled{
+  background: rgba(148, 163, 184, 0.16);
+}
+
+.tag-pick-btn-primary{
+  border-color: rgba(124, 58, 237, 0.22);
+  background: rgba(124, 58, 237, 0.10);
+  color: #6d28d9;
+}
+
+.tag-pick-btn-primary:hover:enabled{
+  background: rgba(124, 58, 237, 0.16);
+}
+
+.tag-pick-btn:disabled{
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.tag-chip{
+  border: 1px solid rgba(124, 58, 237, 0.22);
+  background: rgba(124, 58, 237, 0.10);
+  color: #6d28d9;
+  font-weight: 700;
+  padding: 0.35rem 0.6rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.tag-chip:disabled{
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* Alerts */

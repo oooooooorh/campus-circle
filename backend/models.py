@@ -25,6 +25,23 @@ class Post(database.Base):
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
 
 
+class Tag(database.Base):
+    __tablename__ = "tags"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(30), unique=True, index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+
+class PostTag(database.Base):
+    __tablename__ = "post_tags"
+
+    id = Column(Integer, primary_key=True, index=True)
+    post_id = Column(Integer, ForeignKey("posts.id"), index=True, nullable=False)
+    tag_id = Column(Integer, ForeignKey("tags.id"), index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.now)
+
+
 class Favorite(database.Base):
     __tablename__ = "favorites"
 

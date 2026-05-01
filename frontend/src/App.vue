@@ -20,9 +20,10 @@
 
       <div class="nav-actions">
         <template v-if="isAuthed">
-          <span class="user-pill">已登录</span>
-          <button class="nav-btn" @click="handleLogout">退出登录</button>
-          <button class="nav-btn nav-btn-secondary" @click="handleSwitchAccount">切换账号</button>
+          <router-link to="/me" class="user-pill user-pill-link" title="前往个人中心">
+            <img v-if="avatarSrc" class="nav-avatar" :src="avatarSrc" alt="avatar" />
+            <span>已登录：{{ displayName }}</span>
+          </router-link>
         </template>
         <template v-else>
           <router-link to="/login" class="nav-btn-link">登录</router-link>
@@ -47,23 +48,23 @@
 
 <script setup>
 import { computed } from 'vue'
-import { useRouter } from 'vue-router'
 import AiChat from './components/AiChat.vue'
 import { getAuthToken } from './config.js'
-import { logout } from './api/auth-api.js'
 
-const router = useRouter()
 const isAuthed = computed(() => !!getAuthToken())
+const displayName = computed(() => {
+  // 轻量：先用 token 存在来判断，用户名从 localStorage 读（登录时后续可写入）
+  // 没有则显示“用户”
+  return localStorage.getItem('campus_circle_username') || '用户'
+})
 
-function handleLogout() {
-  logout()
-  router.push('/login')
-}
-
-function handleSwitchAccount() {
-  logout()
-  router.push('/login')
-}
+const avatarSrc = computed(() => {
+  const raw = localStorage.getItem('campus_circle_avatar') || ''
+  if (!raw) return ''
+  if (raw.startsWith('http://') || raw.startsWith('https://')) return raw
+  // 后端返回的是 /static/avatars/...
+  return `http://127.0.0.1:8000${raw}`
+})
 </script>
 
 <style>
@@ -122,6 +123,27 @@ function handleSwitchAccount() {
   border-radius: var(--radius-pill);
   border: 1px solid var(--border-color);
   background: rgba(255,255,255,0.6);
+}
+
+.user-pill-link{
+  text-decoration: none;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.user-pill-link:hover{
+  color: var(--primary-color);
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.nav-avatar{
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  object-fit: cover;
+  border: 1px solid rgba(99,102,241,0.25);
 }
 
 .nav-btn{
