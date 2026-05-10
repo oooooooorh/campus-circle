@@ -17,8 +17,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 复制后端代码到工作目录
 COPY . .
 
-# 暴露 FastAPI 运行的端口
-EXPOSE 8000
+# 暴露 FastAPI 运行的端口 (Azure App Service 默认监听 80 或 8080)
+EXPOSE 80
 
 # 直接使用 uvicorn 单进程运行
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80"]

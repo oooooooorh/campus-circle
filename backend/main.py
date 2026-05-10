@@ -100,14 +100,15 @@ env_origins = os.getenv("CORS_ORIGINS", "")
 if env_origins:
     origins.extend([origin.strip() for origin in env_origins.split(",") if origin.strip()])
 
+# 添加线上前端地址到跨域列表
+origins.append("https://ashy-forest-0df45ff00.7.azurestaticapps.net")
+
 app.add_middleware(
     CORSMiddleware,
-    # 允许所有域名访问（最简单，先确保跑通）
-    allow_origins=["*"], 
-    # 或者填你的前端地址：allow_origins=["https://ashy-forest-0df45ff00.7.azurestaticapps.net"],
+    allow_origins=origins, 
     allow_credentials=True,
-    allow_methods=["*"], # 允许所有方法 (GET, POST, OPTIONS等)
-    allow_headers=["*"], # 允许所有请求头
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ==================== 站内账号鉴权（JWT）====================
