@@ -79,7 +79,7 @@ async def get_campus_schedule(context, username: str = "2320110098", password: s
 
         # 等待登录跳转完成
         print("等待登录跳转完成...")
-        await page.wait_for_timeout(3000)
+        await page.wait_for_timeout(20000)
         print(f"当前页面 URL: {page.url}")
 
         # 检查登录是否失败（简单判断）
@@ -106,8 +106,8 @@ async def get_campus_schedule(context, username: str = "2320110098", password: s
         await new_page.wait_for_load_state("networkidle")
         
         # 再等待一会儿让最后的数据处理完毕
-        print("⏳ 等待 2 秒钟，确保接口数据提取完成...")
-        await new_page.wait_for_timeout(2000)
+        print("⏳ 等待 5 秒钟，确保接口数据提取完成...")
+        await new_page.wait_for_timeout(5000)
 
         # 5. 返回拦截到的数据
         if intercepted_schedule_data:
