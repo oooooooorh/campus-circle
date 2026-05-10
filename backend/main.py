@@ -2,8 +2,6 @@ from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import Session
-from sqlalchemy import text, or_
 import logging
 import asyncio
 import json
@@ -14,18 +12,17 @@ from contextlib import asynccontextmanager
 from playwright.async_api import async_playwright
 from openai import OpenAI
 from pydantic import BaseModel
-from jose import jwt, JWTError
-import base64
-import hashlib
+from redis_db import get_redis
+from upstash_redis import Redis
 import hmac
 import secrets
+from datetime import datetime, timedelta
 
 # 添加后端目录到 Python 路径
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import models
 import schemas
-import database
+from scraper import get_campus_schedule
 from scraper import get_campus_schedule
 
 # ==================== 配置硅基流动大模型 API ====================
@@ -47,8 +44,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# 启动时自动创建数据库表
-database.Base.metadata.create_all(bind=database.engine)
+# 移除了数据库自动创建逻辑（Redis 不需要建表）
 
 # ==================== 应用生命周期事件 ====================
 # 全局 Playwright 和 Browser 实例
@@ -155,8 +151,8 @@ def create_access_token(*, sub: str, expires_delta: timedelta) -> str:
 
 def get_current_user(
     token: str = Depends(oauth2_scheme),
-    db: Session = Depends(database.get_db),
-) -> models.User:
+    r: Redis = Depends(get_redis),
+):
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
         username = payload.get("sub")
@@ -165,10 +161,11 @@ def get_current_user(
     except JWTError:
         raise HTTPException(status_code=401, detail="登录已过期或无效")
 
-    user = db.query(models.User).filter(models.User.username == username).first()
-    if not user:
+    # 这里的逻辑将改为从 Redis 查询用户信息
+    user_data = r.hgetall(f"user:{username}")
+    if not user_data:
         raise HTTPException(status_code=401, detail="用户不存在")
-    return user
+    return user_data
 
 def _normalize_tag(name: str) -> str:
     n = (name or "").strip()
@@ -176,54 +173,10 @@ def _normalize_tag(name: str) -> str:
     return n
 
 
-def _get_tags_for_posts(db: Session, post_ids: list[int]) -> dict[int, list[str]]:
-    if not post_ids:
-        return {}
-    rows = (
-        db.query(models.PostTag.post_id, models.Tag.name)
-        .join(models.Tag, models.PostTag.tag_id == models.Tag.id)
-        .filter(models.PostTag.post_id.in_(post_ids))
-        .all()
-    )
-    m: dict[int, list[str]] = {}
-    for pid, name in rows:
-        m.setdefault(pid, []).append(name)
-    for pid in m:
-        m[pid] = sorted(set(m[pid]))
-    return m
+# 移除了 SQL 版本的标签辅助函数，后续将改用 Redis Set 或 Hash 存储标签信息
 
 
-# ==================== SQLite 轻量迁移（开发用）====================
-def _sqlite_column_exists(db: Session, table: str, column: str) -> bool:
-    rows = db.execute(text(f"PRAGMA table_info({table})")).fetchall()
-    return any(r[1] == column for r in rows)
-
-
-def ensure_sqlite_schema():
-    # 仅对 SQLite 做轻量 ALTER TABLE（本项目默认 SQLite）
-    if not str(database.engine.url).startswith("sqlite"):
-        return
-    db = database.SessionLocal()
-    try:
-        # posts.user_id：旧库没有该列会导致查询崩溃
-        if _sqlite_column_exists(db, "posts", "id") and not _sqlite_column_exists(db, "posts", "user_id"):
-            db.execute(text("ALTER TABLE posts ADD COLUMN user_id INTEGER"))
-            db.commit()
-
-        # users profile columns
-        if _sqlite_column_exists(db, "users", "id") and not _sqlite_column_exists(db, "users", "display_name"):
-            db.execute(text("ALTER TABLE users ADD COLUMN display_name VARCHAR(50)"))
-            db.commit()
-        if _sqlite_column_exists(db, "users", "id") and not _sqlite_column_exists(db, "users", "bio"):
-            db.execute(text("ALTER TABLE users ADD COLUMN bio VARCHAR(200)"))
-            db.commit()
-        if _sqlite_column_exists(db, "users", "id") and not _sqlite_column_exists(db, "users", "avatar_url"):
-            db.execute(text("ALTER TABLE users ADD COLUMN avatar_url VARCHAR(300)"))
-            db.commit()
-    finally:
-        db.close()
-
-ensure_sqlite_schema()
+# 移除了旧的 SQLite 迁移代码，现在改用 Redis 存储
 
 # 根路由
 @app.get("/")
@@ -237,126 +190,58 @@ def root():
 
 # ==================== 注册/登录 ====================
 @app.post("/api/auth/register", response_model=schemas.UserPublic)
-def register(payload: schemas.RegisterRequest, db: Session = Depends(database.get_db)):
-    username = (payload.username or "").strip()
-    password = payload.password or ""
-    if len(username) < 3:
-        raise HTTPException(status_code=400, detail="用户名至少3位")
-    if len(password) < 6:
-        raise HTTPException(status_code=400, detail="密码至少6位")
-
-    exists = db.query(models.User).filter(models.User.username == username).first()
-    if exists:
-        raise HTTPException(status_code=409, detail="用户名已存在")
-
-    user = models.User(username=username, password_hash=hash_password(password))
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return user
+def register(payload: schemas.RegisterRequest, r: Redis = Depends(get_redis)):
+    # TODO: 实现 Redis 用户注册逻辑
+    return {"message": "Redis 注册逻辑待实现"}
 
 
 @app.post("/api/auth/login", response_model=schemas.TokenResponse)
-def login(payload: schemas.LoginRequest, db: Session = Depends(database.get_db)):
-    username = (payload.username or "").strip()
-    password = payload.password or ""
-    user = db.query(models.User).filter(models.User.username == username).first()
-    if not user or not verify_password(password, user.password_hash):
-        raise HTTPException(status_code=401, detail="用户名或密码错误")
-
-    token = create_access_token(
-        sub=user.username,
-        expires_delta=timedelta(minutes=JWT_EXPIRES_MINUTES),
-    )
-    return {"access_token": token, "token_type": "bearer"}
+def login(payload: schemas.LoginRequest, r: Redis = Depends(get_redis)):
+    # TODO: 实现 Redis 登录验证逻辑
+    return {"access_token": "dummy_token", "token_type": "bearer"}
 
 
 @app.get("/api/me", response_model=schemas.UserPublic)
-def me(current_user: models.User = Depends(get_current_user)):
+def me(current_user: dict = Depends(get_current_user)):
     return current_user
 
 
 @app.patch("/api/me", response_model=schemas.UserPublic)
 def update_me(
     payload: schemas.UserUpdate,
-    db: Session = Depends(database.get_db),
-    current_user: models.User = Depends(get_current_user),
+    r: Redis = Depends(get_redis),
+    current_user: dict = Depends(get_current_user),
 ):
-    if payload.display_name is not None:
-        current_user.display_name = (payload.display_name or "").strip() or None
-    if payload.bio is not None:
-        current_user.bio = (payload.bio or "").strip() or None
-    if payload.avatar_url is not None:
-        current_user.avatar_url = (payload.avatar_url or "").strip() or None
-    db.add(current_user)
-    db.commit()
-    db.refresh(current_user)
+    # TODO: 实现 Redis 用户信息更新逻辑
     return current_user
 
 
 @app.post("/api/me/avatar", response_model=schemas.UserPublic)
 def upload_my_avatar(
     file: UploadFile = File(...),
-    db: Session = Depends(database.get_db),
-    current_user: models.User = Depends(get_current_user),
+    r: Redis = Depends(get_redis),
+    current_user: dict = Depends(get_current_user),
 ):
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(status_code=400, detail="请上传图片文件")
-
-    # 简单白名单：常见图片扩展
-    ext = ""
-    if file.filename and "." in file.filename:
-        ext = "." + file.filename.rsplit(".", 1)[-1].lower().strip()
-    if ext not in [".png", ".jpg", ".jpeg", ".webp", ".gif", ""]:
-        raise HTTPException(status_code=400, detail="不支持的图片格式")
-
-    filename = f"user_{current_user.id}_{int(datetime.utcnow().timestamp())}{ext or '.png'}"
-    save_path = os.path.join(AVATAR_DIR, filename)
-
-    data = file.file.read()
-    if len(data) > 2 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="图片不能超过 2MB")
-    with open(save_path, "wb") as f:
-        f.write(data)
-
-    current_user.avatar_url = f"/static/avatars/{filename}"
-    db.add(current_user)
-    db.commit()
-    db.refresh(current_user)
+    # TODO: 实现 Redis 头像更新逻辑
     return current_user
 
 
 @app.get("/api/me/posts", response_model=list[schemas.Post])
 def my_posts(
-    db: Session = Depends(database.get_db),
-    current_user: models.User = Depends(get_current_user),
+    r: Redis = Depends(get_redis),
+    current_user: dict = Depends(get_current_user),
     skip: int = 0,
     limit: int = 100,
 ):
-    posts = (
-        db.query(models.Post)
-        .filter(models.Post.user_id == current_user.id)
-        .order_by(models.Post.created_at.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
-    tag_map = _get_tags_for_posts(db, [p.id for p in posts])
-    result = []
-    for p in posts:
-        item = schemas.Post.model_validate(p)
-        item.tags = tag_map.get(p.id, [])
-        result.append(item)
-    return result
+    # TODO: 实现 Redis 获取个人帖子逻辑
+    return []
 
 
 # ==================== 公开用户信息 ====================
 @app.get("/api/users/{user_id}", response_model=schemas.PublicUser)
-def get_public_user(user_id: int, db: Session = Depends(database.get_db)):
-    user = db.query(models.User).filter(models.User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="用户不存在")
-    return schemas.PublicUser.model_validate(user)
+def get_public_user(user_id: int, r: Redis = Depends(get_redis)):
+    # TODO: 实现 Redis 获取公开用户信息逻辑
+    return {"id": user_id, "username": "unknown"}
 
 
 # ==================== 课表爬虫相关接口 ====================
@@ -414,200 +299,108 @@ async def get_schedule(info: schemas.LoginInfo):
 
 
 # ==================== 获取全部帖子 (改进版 支持分页或者一次性获取) ====================
-@app.get("/api/posts", response_model=list[schemas.Post])
+@app.get("/api/posts")
 def get_all_posts(
-    skip: int = 0,
-    limit: int = 100,
-    q: str | None = None,
-    db: Session = Depends(database.get_db),
+    skip:int=0,
+    limit:int=100,
+    r:Redis=Depends(get_redis),
 ):
-    query = db.query(models.Post)
-    if q and q.strip():
-        kw = f"%{q.strip()}%"
-        query = (
-            query.outerjoin(models.User, models.Post.user_id == models.User.id)
-            .outerjoin(models.PostTag, models.PostTag.post_id == models.Post.id)
-            .outerjoin(models.Tag, models.PostTag.tag_id == models.Tag.id)
-            .filter(
-                or_(
-                    models.Post.title.ilike(kw),
-                    models.Post.content.ilike(kw),
-                    models.User.username.ilike(kw),
-                    models.User.display_name.ilike(kw),
-                    models.Tag.name.ilike(kw),
-                )
-            )
-            .distinct()
-        )
-
-    posts = query.order_by(models.Post.created_at.desc()).offset(skip).limit(limit).all()
-
-    user_ids = [p.user_id for p in posts if p.user_id]
-    author_map = {}
-    if user_ids:
-        users = db.query(models.User).filter(models.User.id.in_(list(set(user_ids)))).all()
-        author_map = {u.id: u for u in users}
-
-    tag_map = _get_tags_for_posts(db, [p.id for p in posts])
-
-    result = []
-    for p in posts:
-        item = schemas.Post.model_validate(p)
-        if p.user_id and p.user_id in author_map:
-            item.author = schemas.UserPublic.model_validate(author_map[p.user_id])
-        item.tags = tag_map.get(p.id, [])
-        result.append(item)
+    #使用 lrange 切片取出帖子 ID 列表
+    post_ids=r.lrange("posts:timeline",skip,skip+limit-1)
+    if not post_ids:
+        return []
+    result=[]
+    for pid in post_ids:
+        #遍历ID，去Hash表里把完整的帖子数据捞出来
+        # HGETALL 能获取该键下的整个字典
+        post_data=r.hgetall(f"post:{pid}")
+        if post_data:
+            #因为从redis取出来都是字节串，所以要转一下
+            post_data["id"]=int(post_data["id"])
+            result.append(post_data)
+    
     return result
 
 
 @app.get("/api/posts/{post_id}", response_model=schemas.Post)
-def get_post_detail(post_id: int, db: Session = Depends(database.get_db)):
-    post = db.query(models.Post).filter(models.Post.id == post_id).first()
-    if not post:
+def get_post_detail(post_id: int, r: Redis = Depends(get_redis)):
+    post_data = r.hgetall(f"post:{post_id}")
+    if not post_data:
         raise HTTPException(status_code=404, detail="帖子不存在")
-
-    item = schemas.Post.model_validate(post)
-    if post.user_id:
-        u = db.query(models.User).filter(models.User.id == post.user_id).first()
-        if u:
-            item.author = schemas.UserPublic.model_validate(u)
-    item.tags = _get_tags_for_posts(db, [post.id]).get(post.id, [])
-    return item
+    post_data["id"] = int(post_data["id"])
+    return post_data
 
 # ==================== 发布帖子 ====================
 @app.post("/api/posts", response_model=schemas.Post)
 def create_post(
     payload: schemas.PostCreate,
-    db: Session = Depends(database.get_db),
-    current_user: models.User = Depends(get_current_user),
+    r: Redis = Depends(get_redis),
 ):
-    title = (payload.title or "").strip()
-    content = (payload.content or "").strip()
+    #拦截空数据
+    title=(payload.title or "").strip()
+    content=(payload.content or "").strip()
     if not title or not content:
-        raise HTTPException(status_code=400, detail="标题和内容不能为空")
+        raise HTTPException(status_code=400,detail="标题和内容不能为空")
+    
+    #生成自增的主键ID
+    # INCR 命令会自动把 "post_id_counter" 加 1
+    post_id=r.incr("global:post_id")
+    
+    #组装数据字典
+    post_data={
+        "id":post_id,
+        "title":title,
+        "content":content,
+        "created_at":datetime.now().isoformat(),#时间格式化
+    }
+    # 把数据存入Redis的Hash表
+    # 键名设计为"post:1","post:2"这种层级格式，upstash 中多字段字典通过 values= 传入
+    r.hset(f"post:{post_id}", values=post_data)
 
-    post = models.Post(title=title, content=content, user_id=current_user.id)
-    db.add(post)
-    db.commit()
-    db.refresh(post)
+    # 把帖子ID塞入一个大列表（List）的最前面，方便查询最新帖子
+    r.lpush("posts:timeline", post_id)
 
-    # tags
-    tags = payload.tags or []
-    norm = []
-    for t in tags:
-        n = _normalize_tag(t)
-        if n:
-            norm.append(n)
-    # 去重 & 限制 7 个
-    norm = list(dict.fromkeys(norm))[:7]
-    for name in norm:
-        if len(name) > 20:
-            raise HTTPException(status_code=400, detail="单个分区标签最多20个字符")
-        tag = db.query(models.Tag).filter(models.Tag.name == name).first()
-        if not tag:
-            tag = models.Tag(name=name)
-            db.add(tag)
-            db.commit()
-            db.refresh(tag)
-        link = models.PostTag(post_id=post.id, tag_id=tag.id)
-        db.add(link)
-    db.commit()
-
-    item = schemas.Post.model_validate(post)
-    item.author = schemas.UserPublic.model_validate(current_user)
-    item.tags = norm
-    return item
+    return post_data
 
 
 # ==================== 收藏（Favorite）====================
 @app.get("/api/me/favorites/ids", response_model=list[int])
 def my_favorite_ids(
-    db: Session = Depends(database.get_db),
-    current_user: models.User = Depends(get_current_user),
+    r: Redis = Depends(get_redis),
+    current_user: dict = Depends(get_current_user),
 ):
-    rows = db.query(models.Favorite.post_id).filter(models.Favorite.user_id == current_user.id).all()
-    return [r[0] for r in rows]
+    # TODO: 实现 Redis 获取收藏 ID 列表逻辑
+    return []
 
 
 @app.get("/api/me/favorites", response_model=list[schemas.Post])
 def my_favorites(
-    db: Session = Depends(database.get_db),
-    current_user: models.User = Depends(get_current_user),
+    r: Redis = Depends(get_redis),
+    current_user: dict = Depends(get_current_user),
     skip: int = 0,
     limit: int = 100,
 ):
-    fav_post_ids = (
-        db.query(models.Favorite.post_id)
-        .filter(models.Favorite.user_id == current_user.id)
-        .order_by(models.Favorite.created_at.desc())
-        .offset(skip)
-        .limit(limit)
-        .all()
-    )
-    ids = [r[0] for r in fav_post_ids]
-    if not ids:
-        return []
-
-    posts = db.query(models.Post).filter(models.Post.id.in_(ids)).all()
-    post_map = {p.id: p for p in posts}
-
-    # author hydrate
-    user_ids = [p.user_id for p in posts if p.user_id]
-    author_map = {}
-    if user_ids:
-        users = db.query(models.User).filter(models.User.id.in_(list(set(user_ids)))).all()
-        author_map = {u.id: u for u in users}
-
-    tag_map = _get_tags_for_posts(db, [p.id for p in posts])
-
-    result = []
-    for pid in ids:
-        p = post_map.get(pid)
-        if not p:
-            continue
-        item = schemas.Post.model_validate(p)
-        if p.user_id and p.user_id in author_map:
-            item.author = schemas.UserPublic.model_validate(author_map[p.user_id])
-        item.tags = tag_map.get(p.id, [])
-        result.append(item)
-    return result
+    # TODO: 实现 Redis 获取收藏帖子列表逻辑
+    return []
 
 
 @app.post("/api/posts/{post_id}/favorite")
 def favorite_post(
     post_id: int,
-    db: Session = Depends(database.get_db),
-    current_user: models.User = Depends(get_current_user),
+    r: Redis = Depends(get_redis),
+    current_user: dict = Depends(get_current_user),
 ):
-    post = db.query(models.Post).filter(models.Post.id == post_id).first()
-    if not post:
-        raise HTTPException(status_code=404, detail="帖子不存在")
-
-    exists = (
-        db.query(models.Favorite)
-        .filter(models.Favorite.user_id == current_user.id, models.Favorite.post_id == post_id)
-        .first()
-    )
-    if exists:
-        return {"success": True}
-
-    fav = models.Favorite(user_id=current_user.id, post_id=post_id)
-    db.add(fav)
-    db.commit()
+    # TODO: 实现 Redis 收藏逻辑
     return {"success": True}
 
 
 @app.delete("/api/posts/{post_id}/favorite")
 def unfavorite_post(
     post_id: int,
-    db: Session = Depends(database.get_db),
-    current_user: models.User = Depends(get_current_user),
+    r: Redis = Depends(get_redis),
+    current_user: dict = Depends(get_current_user),
 ):
-    q = db.query(models.Favorite).filter(
-        models.Favorite.user_id == current_user.id, models.Favorite.post_id == post_id
-    )
-    q.delete()
-    db.commit()
+    # TODO: 实现 Redis 取消收藏逻辑
     return {"success": True}
 
 # ==================== AI 问答接口 ====================

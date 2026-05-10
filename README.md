@@ -12,7 +12,7 @@
 ### 后端 (Backend)
 *   **框架**: FastAPI (Python)
 *   **自动化爬虫**: Playwright (用于异步爬取校园课表数据)
-*   **数据库**: SQLite (本地开发) + SQLAlchemy / ORM
+*   **数据库**: Redis (高性能 Key-Value 存储，解决 Azure 部署数据丢失问题)
 *   **服务器**: Uvicorn
 
 ---
@@ -45,8 +45,30 @@ campus-circle/
 *   **Python**: 3.8+ (推荐使用 Conda 虚拟环境)
 *   **Node.js**: 16.x+ (建议使用 LTS 版本)
 *   **包管理器**: npm 或 yarn, pip
+*   **Docker**: 用于部署 Redis 数据库
 
-### 2. 后端部署 (Backend Setup)
+### 2. 数据库准备 (Redis Setup)
+
+本项目支持两种方式连接 Redis 数据库：
+
+#### 方案 A：使用 Upstash Serverless Redis (推荐，用于部署)
+1.  **访问官网**: [Upstash Console](https://console.upstash.com/) 并获取 `REST URL` 和 `REST TOKEN`。
+2.  **安装驱动**: `pip install upstash-redis`
+3.  **优势**: 零配置、云端存储、Azure 重启不丢数据。
+
+#### 方案 B：使用本地 Docker 部署 (用于纯本地离线开发)
+如果你希望在本地运行 Redis 容器，请确保已安装 Docker 并运行以下命令：
+
+```bash
+# 如果之前已经运行过，先删除旧容器避免重名冲突
+docker rm -f my-redis
+
+# 启动 Redis 容器 (包含持久化配置)
+docker run -d --name my-redis -p 6379:6379 --restart always redis:latest redis-server --appendonly yes
+```
+*注意：如使用本地 Docker，需安装原生驱动 `pip install redis` 并修改 `redis_db.py` 以连接 localhost。*
+
+### 3. 后端部署 (Backend Setup)
 
 我们建议您使用 Conda 创建名为 `campus_env` 的虚拟环境：
 
@@ -68,7 +90,7 @@ python run_server.py
 # 或使用: python -m uvicorn main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-### 3. 前端部署 (Frontend Setup)
+### 4. 前端部署 (Frontend Setup)
 
 打开一个新的终端窗口：
 
